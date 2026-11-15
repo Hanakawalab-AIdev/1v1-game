@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>2D Action - 1v1 Versus</title>
+<style>
+  body { margin: 0; background: #222; display: flex; flex-direction: column; align-items: center; font-family: sans-serif; color: #eee; }
+  canvas { margin-top: 20px; border: 2px solid #555; }
+  p { font-size: 14px; margin: 6px; }
+  .p1 { color: #ff6b6b; } .p2 { color: #64b5f6; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="400"></canvas>
+<p><span class="p1">P1（赤）：A D 移動 / W ジャンプ</span>　｜　<span class="p2">P2（青）：← → 移動 / ↑ ジャンプ</span></p>
+<p>相手の頭を踏むと1点。先に5点で勝利。　Enter：再戦　F1：デバッグ表示</p>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+// ===== 競技ルール・定数 =====
+const TICK_RATE = 60;            // 物理は常に 60tick/秒（モニター差なし）
+const TICK_MS = 1000 / TICK_RATE;
+const WIN_SCORE = 5;             // 先取点数
+const COUNTDOWN_TICKS = 180;     // 試合開始前 3秒
+const RESPAWN_INVULN = 90;       // 復活後の無敵 1.5秒
+
+const GROUND_Y = 340;
+const GRAVITY = 0.6;
+const MAX_FALL = 14;
+const MOVE_SPEED = 4;
+const JUMP_POWER = 12;
+const JUMP_CUT = 0.5;
+const STOMP_BOUNCE = 9;          // 踏んだ側の跳ね返り
+const COYOTE_TICKS = 6;
+const JUMP_BUFFER_TICKS = 6;
+
+// 左右対称のステージ（下からすり抜け可能な足場）
+const PLATFORMS = [
+  { x: 80,  y: 260, w: 160 },
+  { x: 560, y: 260, w: 160 },
+  { x: 320, y: 190, w: 160 },
+  { x: 120, y: 120, w: 120 },
+  { x: 560, y: 120, w: 120 },
+];
+const PLATFORM_H = 12;
+
+const PLAYER_DEFS = [
+  { name: "P1", color: "#e53935", spawnX: 150, facing: 1,
+    left: ["KeyA"], right: ["KeyD"], jump: ["KeyW"] },
+  { name: "P2", color: "#1e88e5", spawnX: 620, facing: -1,
+    left: ["ArrowLeft"], right: ["ArrowRight"], jump: ["ArrowUp"] },
+];
+
+let players, tick, state, countdown, winner, showDebug = false;
+
+function spawn(p) {
+  p.x = p.def.spawnX; p.y = GROUND_Y - p.h;
+  p.vx = 0; p.vy = 0;
+  p.onGround = true; p.facing = p.def.facing;
+  p.coyote = COYOTE_TICKS; p.jumpBuffer = 0;
+}
+
+function resetMatch() {
+  players = PLAYER_DEFS.map(def => {
+    const p = { def, w: 30, h: 40, score: 0, invuln: 0 };
+    spawn(p);
+    return p;
+  });
+  tick = 0;
+  state = "countdown"; // countdown → playing → finished
+  countdown = COUNTDOWN_TICKS;
+  winner = null;
+}
+resetMatch();
+
+// ===== 入力 =====
+const keys = {};
+const pressed = {};
+const GAME_KEYS = ["KeyA", "KeyD", "KeyW", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "F1"];
+window.addEventListener("keydown", e => {
+  if (!keys[e.code]) pressed[e.code] = true;
+  keys[e.code] = true;
+  if (GAME_KEYS.includes(e.code)) e.preventDefault();
+  if (e.code === "Enter" && state === "finished") resetMatch();
+  if (e.code === "F1") showDebug = !showDebug;
+});
+window.addEventListener("keyup", e => { keys[e.code] = false; });
+window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; });
+const held = codes => codes.some(c => keys[c]);
+const justPressed = codes => codes.some(c => pressed[c]);
+
+// ===== 1人分の移動（入力 → 速度 → 位置 → 地形） =====
+function movePlayer(p, canAct) {
+  const d = p.def;
+  p.prevBottom = p.y + p.h;
+
+  p.vx = 0;
+  if (canAct && held(d.left))  p.vx -= MOVE_SPEED;
+  if (canAct && held(d.right)) p.vx += MOVE_SPEED;
+  if (p.vx !== 0) p.facing = Math.sign(p.vx);
+  p.x = Math.max(0, Math.min(canvas.width - p.w, p.x + p.vx));
+
+  if (canAct && justPressed(d.jump)) p.jumpBuffer = JUMP_BUFFER_TICKS;
+  if (p.jumpBuffer > 0 && p.coyote > 0) {
+    p.vy = -JUMP_POWER; p.onGround = false; p.coyote = 0; p.jumpBuffer = 0;
+  }
+  if (!held(d.jump) && p.vy < 0) p.vy *= JUMP_CUT;
+
+  p.vy = Math.min(p.vy + GRAVITY, MAX_FALL);
+  p.y += p.vy;
+
+  p.onGround = false;
+  if (p.y + p.h >= GROUND_Y) {
+    p.y = GROUND_Y - p.h; p.vy = 0; p.onGround = true;
+  } else if (p.vy >= 0) {
+    // 足場: 上から落ちてきた時だけ着地（下からはすり抜け）
+    for (const pl of PLATFORMS) {
+      const overlapX = p.x + p.w > pl.x && p.x < pl.x + pl.w;
+      if (overlapX && p.prevBottom <= pl.y && p.y + p.h >= pl.y) {
+        p.y = pl.y - p.h; p.vy = 0; p.onGround = true; break;
+      }
+    }
+  }
+
+  p.coyote = p.onGround ? COYOTE_TICKS : Math.max(0, p.coyote - 1);
+  p.jumpBuffer = Math.max(0, p.jumpBuffer - 1);
+  if (p.invuln > 0) p.invuln--;
+}
+
+const overlaps = (a, b) =>
+  a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+// 踏みつけ: 前tickで相手の頭より上にいて、落下中に重なった
+function isStomp(top, bottom) {
+  return top.vy > 0 && top.prevBottom <= bottom.y + 4 && bottom.invuln === 0;
+}
+
+// ===== プレイヤー同士の判定（両者の移動後にまとめて処理＝更新順の有利不利なし） =====
+function resolvePlayers() {
+  const [a, b] = players;
+  if (!overlaps(a, b)) return;
+
+  const aStomps = isStomp(a, b);
+  const bStomps = isStomp(b, a);
+  if (aStomps !== bStomps) {
+    const [top, bottom] = aStomps ? [a, b] : [b, a];
+    top.score++;
+    top.vy = -STOMP_BOUNCE; top.onGround = false; top.coyote = 0;
+    spawn(bottom); bottom.invuln = RESPAWN_INVULN;
+    if (top.score >= WIN_SCORE) { state = "finished"; winner = top; }
+    return;
+  }
+
+  // 踏みつけでなければ横に押し合う（半分ずつずらす＝公平）
+  const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const dir = (a.x + a.w / 2) <= (b.x + b.w / 2) ? -1 : 1;
+  a.x += dir * overlapX / 2;
+  b.x -= dir * overlapX / 2;
+  for (const p of players) p.x = Math.max(0, Math.min(canvas.width - p.w, p.x));
+}
+
+function update() {
+  if (state === "countdown") {
+    countdown--;
+    if (countdown <= 0) state = "playing";
+  } else if (state === "playing") {
+    tick++;
+  }
+  const canAct = state === "playing";
+  for (const p of players) movePlayer(p, canAct);
+  if (canAct) resolvePlayers();
+  for (const k in pressed) delete pressed[k];
+}
+
+// ===== 描画 =====
+function drawBackground() {
+  const sky = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  sky.addColorStop(0, "#6ec6ff");
+  sky.addColorStop(1, "#d6f0ff");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, canvas.width, GROUND_Y);
+
+  ctx.fillStyle = "#8fbf8f";
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND_Y);
+  ctx.lineTo(150, 220); ctx.lineTo(300, GROUND_Y);
+  ctx.lineTo(400, 200); ctx.lineTo(500, GROUND_Y);
+  ctx.lineTo(650, 220); ctx.lineTo(800, GROUND_Y);
+  ctx.fill();
+
+  ctx.fillStyle = "#7a5230";
+  ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+  ctx.fillStyle = "#4caf50";
+  ctx.fillRect(0, GROUND_Y, canvas.width, 8);
+
+  for (const pl of PLATFORMS) {
+    ctx.fillStyle = "#8d6e63";
+    ctx.fillRect(pl.x, pl.y, pl.w, PLATFORM_H);
+    ctx.fillStyle = "#4caf50";
+    ctx.fillRect(pl.x, pl.y, pl.w, 4);
+  }
+}
+
+function drawPlayer(p) {
+  if (p.invuln > 0 && Math.floor(p.invuln / 5) % 2 === 0) return; // 無敵中は点滅
+  ctx.fillStyle = p.def.color;
+  ctx.fillRect(p.x, p.y, p.w, p.h);
+  ctx.fillStyle = "#fff";
+  const eyeX = p.facing < 0 ? p.x + 5 : p.x + p.w - 12;
+  ctx.fillRect(eyeX, p.y + 8, 7, 7);
+  ctx.fillStyle = "#000";
+  ctx.font = "bold 11px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(p.def.name, p.x + p.w / 2, p.y - 4);
+  ctx.textAlign = "left";
+}
+
+function formatTime(t) {
+  const ms = Math.floor(t * TICK_MS);
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor(ms / 1000) % 60;
+  return `${m}:${String(s).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
+}
+
+let fps = 0, fpsFrames = 0, fpsTime = 0;
+function drawHUD() {
+  const [a, b] = players;
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(300, 8, 200, 54);
+  ctx.textAlign = "center";
+  ctx.font = "bold 26px monospace";
+  ctx.fillStyle = "#ff6b6b"; ctx.fillText(a.score, 360, 38);
+  ctx.fillStyle = "#fff";    ctx.fillText("-", 400, 38);
+  ctx.fillStyle = "#64b5f6"; ctx.fillText(b.score, 440, 38);
+  ctx.font = "12px monospace";
+  ctx.fillStyle = "#ddd";
+  ctx.fillText(formatTime(tick), 400, 56);
+
+  if (state === "countdown") {
+    ctx.font = "bold 72px sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 4;
+    const n = String(Math.ceil(countdown / TICK_RATE));
+    ctx.strokeText(n, 400, 200); ctx.fillText(n, 400, 200);
+  } else if (state === "finished") {
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = "bold 48px sans-serif";
+    ctx.fillStyle = winner.def.color;
+    ctx.fillText(`${winner.def.name} WINS!`, 400, 180);
+    ctx.font = "18px sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(`${a.score} - ${b.score}　試合時間 ${formatTime(tick)}`, 400, 220);
+    ctx.fillText("Enter で再戦", 400, 255);
+  }
+  ctx.textAlign = "left";
+
+  if (showDebug) {
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(8, 8, 230, 84);
+    ctx.fillStyle = "#0f0";
+    ctx.font = "12px monospace";
+    ctx.fillText(`FPS ${fps}  tick ${tick}  ${state}`, 16, 26);
+    players.forEach((p, i) => {
+      ctx.fillText(`${p.def.name} pos ${p.x.toFixed(0)},${p.y.toFixed(0)} vy ${p.vy.toFixed(1)}`, 16, 46 + i * 36);
+      ctx.fillText(`   gnd ${p.onGround} coy ${p.coyote} inv ${p.invuln}`, 16, 62 + i * 36);
+    });
+  }
+}
+
+// ===== メインループ（描画は毎フレーム、物理は固定tick） =====
+let last = performance.now(), acc = 0;
+function loop(now) {
+  acc += Math.min(now - last, 250);
+  last = now;
+  while (acc >= TICK_MS) { update(); acc -= TICK_MS; }
+
+  fpsFrames++;
+  if (now - fpsTime >= 1000) { fps = fpsFrames; fpsFrames = 0; fpsTime = now; }
+
+  drawBackground();
+  players.forEach(drawPlayer);
+  drawHUD();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

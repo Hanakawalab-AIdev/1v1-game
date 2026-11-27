@@ -1,0 +1,14 @@
+{
+  "name": "stomp-duel",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Local and online 1v1 stomp-battle platform game (HTML5 Canvas, no dependencies).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/run-tests.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

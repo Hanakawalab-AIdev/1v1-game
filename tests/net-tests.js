@@ -340,6 +340,18 @@ module.exports = function (SG, { test, assert, eq }) {
     if (r.status !== 0) throw new Error('server-test failed:\n' + (r.stdout || '') + (r.stderr || '') + (r.error || ''));
   });
 
+  test('download: StompDuel.html is up to date and contains every script (works as a single file)', () => {
+    const fs = require('fs');
+    const { build, OUT } = require(path.join(__dirname, '..', 'tools', 'build-standalone.js'));
+    const norm = (s) => s.replace(/\r\n/g, '\n');
+    assert(fs.existsSync(OUT), 'StompDuel.html exists (run: node tools/build-standalone.js)');
+    const built = build();
+    eq(norm(fs.readFileSync(OUT, 'utf8')) === norm(built), true, 'StompDuel.html is stale: run node tools/build-standalone.js');
+    assert(!/<script src=/.test(built), 'no external scripts left');
+    const index = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+    assert(index.includes('window.game instanceof window.SG.Game') && index.includes('StompDuel.html'), 'index.html explains missing files instead of a blank page');
+  });
+
   // ------------------------------------------------------------ gamepads (virtual keys from main.js)
   test('gamepad: controller 1 moves/jumps P1, controller 2 moves P2, Start pauses', () => {
     const { g } = makeGame(null);

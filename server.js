@@ -39,15 +39,18 @@ function resolveStatic(urlPath) {
   return null;
 }
 
+// Addresses other devices can use to reach this computer. Skips 169.254.x.x (unconnected adapters)
+// and lists home/office network ranges (192.168.x, 10.x, 172.16–31.x) first.
 function lanAddresses() {
   const out = [];
   const ifs = os.networkInterfaces();
   for (const name of Object.keys(ifs)) {
     for (const a of ifs[name] || []) {
-      if ((a.family === 'IPv4' || a.family === 4) && !a.internal) out.push(a.address);
+      if ((a.family === 'IPv4' || a.family === 4) && !a.internal && !a.address.startsWith('169.254.')) out.push(a.address);
     }
   }
-  return out;
+  const isPrivate = (ip) => /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
+  return out.sort((a, b) => Number(isPrivate(b)) - Number(isPrivate(a)));
 }
 
 const ips = lanAddresses();
@@ -62,6 +65,10 @@ const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     return res.end('ok');
+  }
+  if (req.url === '/info') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+    return res.end(JSON.stringify({ ips, port: PORT }));
   }
   const file = resolveStatic(req.url);
   if (!file) {
@@ -118,7 +125,10 @@ setInterval(() => rooms.update(now()), 4);
 
 server.listen(PORT, HOST, () => {
   console.log('Stomp Duel server running.');
-  console.log(`  This computer:   http://localhost:${PORT}`);
-  for (const ip of ips) console.log(`  Other devices:   http://${ip}:${PORT}`);
+  console.log(`  On this computer open:     http://localhost:${PORT}`);
+  if (ips.length) {
+    for (const ip of ips) console.log(`  On phones / other PCs open: http://${ip}:${PORT}   (same Wi-Fi)`);
+    console.log('  ("localhost" only works on this computer itself.)');
+  } else console.log('  No network connection found: other devices cannot join until this PC is on Wi-Fi / LAN.');
   console.log('Press Ctrl+C to stop.');
 });

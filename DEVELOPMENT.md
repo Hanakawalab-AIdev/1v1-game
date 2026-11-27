@@ -158,3 +158,9 @@ window (the QA pane was hidden, so frames were throttled and ticks were driven m
   stage-select and how-to layout, results screen fighters).
 - 2026-11-27: Multi-device pass: `server.js` (no packages) with rooms + server-clocked netcode, online
   menus/lobby/join keypad, gamepads, touch controls, pointer value adjust, 17 new tests (69 total).
+- 2026-11-27: Download/launch fixes from user report: index.html opened without its js/ folder (single file
+  or inside a ZIP) showed a black box → added generated single-file `StompDuel.html` (tools/build-standalone.js,
+  test keeps it in sync) and an explanatory error page. Other devices tried `localhost` → server now prints and
+  the Online screen shows the Wi-Fi address (`/info`), skips 169.254.x adapters; README troubleshooting.
+  Verified with headless Edge from disk (lone index.html → message; StompDuel.html alone → game) and
+  `/info` via the Wi-Fi address on this PC. Not verified: an actual second device on this Wi-Fi.

@@ -381,6 +381,9 @@
     const lines = t('onlineInfo');
     lines.forEach((l, i) => SG.text(ctx, l, VW / 2, 92 + i * 26, { size: 14, color: i === 1 ? '#ffe9a0' : '#eef0ff', weight: i === 1 ? 'bold' : 'normal' }));
     if (!game.hooks.netConnect) SG.text(ctx, t('noServerInfo'), VW / 2, 214, { size: 12, color: '#ff9a90', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 3 });
+    else if (SG.deviceUrls && SG.deviceUrls.length) {
+      SG.text(ctx, t('otherDevices', SG.deviceUrls[0]), VW / 2, 213, { size: 14, weight: '900', color: '#8cc8ff', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 4 });
+    }
     list(game, game.menuItems(), { top: 236, gap: 38, w: 340, bottom: VH - 30 });
     hint(t('menuHint'));
   }

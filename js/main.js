@@ -188,10 +188,21 @@
   }
   // Addresses to show the other player. When this page was opened as "localhost", other devices
   // need the computer's network address, which the server reports.
-  function shareUrls(code, ips, port) {
+  function baseUrls(ips, port) {
     const local = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
-    if (!local) return [location.origin + '/?room=' + code];
-    return ips.map((ip) => `http://${ip}:${port || location.port}/?room=${code}`);
+    if (!local) return [location.origin];
+    return ips.map((ip) => `http://${ip}:${port || location.port}`);
+  }
+  function shareUrls(code, ips, port) {
+    return baseUrls(ips, port).map((u) => u + '/?room=' + code);
+  }
+  // Address other devices should open (shown on the Online screen).
+  SG.deviceUrls = [];
+  if (onServer) {
+    fetch('/info', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => { if (info && Array.isArray(info.ips)) SG.deviceUrls = baseUrls(info.ips, info.port); })
+      .catch(() => { /* not served by server.js */ });
   }
 
   // ---------------------------------------------------------------- game

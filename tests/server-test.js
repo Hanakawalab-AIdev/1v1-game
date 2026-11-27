@@ -71,6 +71,9 @@ async function waitForServer() {
   await waitForServer();
   const index = await get('/');
   if (index.status !== 200 || !index.type.includes('text/html') || !index.body.includes('js/net.js')) fail('index.html not served');
+  const info = JSON.parse((await get('/info')).body);
+  if (!Array.isArray(info.ips) || info.port !== PORT) fail('/info wrong');
+  if (info.ips.some((ip) => ip.startsWith('169.254.') || ip.startsWith('127.'))) fail('unusable address listed: ' + info.ips);
   const js = await get('/js/sim.js');
   if (js.status !== 200 || !js.type.includes('javascript')) fail('js not served as javascript: ' + js.type);
   for (const p of ['/server.js', '/server/rooms.js', '/js/../server.js', '/%2e%2e/server.js', '/package.json', '/.git/config']) {

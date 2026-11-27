@@ -28,5 +28,16 @@
 <script src="js/render.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>
+<script>
+  // If the js/ folder is missing (e.g. index.html opened alone or from inside a ZIP), explain instead of a blank page.
+  if (!(window.SG && window.SG.Game && window.game instanceof window.SG.Game)) {
+    document.body.innerHTML = '<div style="color:#fff;font:16px/1.6 sans-serif;max-width:640px;padding:24px">' +
+      '<h2>Stomp Duel could not load its files</h2>' +
+      '<p>The <b>js</b> folder next to index.html is missing. If you downloaded a ZIP, right-click it → <b>Extract All</b>, ' +
+      'then open index.html from the extracted folder. Or open <b>StompDuel.html</b>, which works on its own.</p>' +
+      '<p>ゲームのファイルを読み込めませんでした。ZIP の場合は「すべて展開」してから index.html を開くか、' +
+      '単体で動く <b>StompDuel.html</b> を開いてください。</p></div>';
+  }
+</script>
 </body>
 </html>

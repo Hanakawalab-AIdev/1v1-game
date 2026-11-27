@@ -1,0 +1,4768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stomp Duel — 2D Action Versus</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='8' width='24' height='22' rx='9' fill='%23ea3f3a' stroke='%233a0b10' stroke-width='2'/%3E%3Ccircle cx='13' cy='17' r='3' fill='%23fff'/%3E%3Ccircle cx='21' cy='17' r='3' fill='%23fff'/%3E%3Cpath d='M10 9 Q12 2 16 4 Q18 0 22 3 L22 9 Z' fill='%23ffb43c'/%3E%3C/svg%3E">
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0c1e; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; border-radius: 6px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); background: #000;
+           touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  noscript { color: #fff; font-family: sans-serif; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="400" tabindex="0" aria-label="Stomp Duel game"></canvas>
+<noscript>This game needs JavaScript enabled.</noscript>
+<script>
+// ---- js/core.js
+// core.js — shared namespace, competitive constants and small utilities.
+// Loaded first. Works both in the browser (classic <script>) and in Node (tests).
+(function (root) {
+  'use strict';
+  const SG = (root.SG = root.SG || {});
+
+  SG.GAME_TITLE = 'STOMP DUEL';
+
+  // ===== Competitive rules (values identical to the Day 1 prototype) =====
+  SG.C = Object.freeze({
+    TICK_RATE: 60,               // physics always runs at 60 ticks/s (no monitor advantage)
+    TICK_MS: 1000 / 60,
+    COUNTDOWN_TICKS: 180,        // 3 s before each round, no control
+    RESPAWN_INVULN: 90,          // 1.5 s of invulnerability after respawn
+    ROUND_END_TICKS: 120,        // celebration pause after a round/match is decided
+    GRAVITY: 0.6,
+    MAX_FALL: 14,
+    MOVE_SPEED: 4,
+    JUMP_POWER: 12,
+    JUMP_CUT: 0.5,               // applied every tick while rising with jump released
+    STOMP_BOUNCE: 9,
+    STOMP_TOLERANCE: 4,
+    COYOTE_TICKS: 6,
+    JUMP_BUFFER_TICKS: 6,
+    PLAYER_W: 30,
+    PLAYER_H: 40,
+    PLATFORM_H: 12,
+    VIEW_W: 800,
+    VIEW_H: 400,
+  });
+
+  SG.NO_INPUT = Object.freeze({ left: false, right: false, jumpHeld: false, jumpPressed: false });
+
+  SG.clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+  SG.lerp = (a, b, t) => a + (b - a) * t;
+
+  // Seeded PRNG (mulberry32). Used only by AI decisions and cosmetic effects — never by physics.
+  SG.makeRng = function (seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+
+  // Deterministic hash → [0,1) for procedural cosmetic details (window lights, flowers...).
+  SG.hash01 = function (n) {
+    let x = Math.imul((n | 0) ^ 0x9e3779b9, 0x85ebca6b);
+    x ^= x >>> 13;
+    x = Math.imul(x, 0xc2b2ae35);
+    x ^= x >>> 16;
+    return (x >>> 0) / 4294967296;
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/i18n.js
+// i18n.js — UI strings (English / Japanese). SG.t(key, ...args) → localized string.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+
+  const S = {
+    en: {
+      subtitle: 'Local 1v1 stomp-battle',
+      pressStart: 'Press Enter to start',
+      // main
+      localVs: 'Local 1v1',
+      vsCpu: '1P vs CPU',
+      practice: 'Practice',
+      settings: 'Settings',
+      howTo: 'How to Play',
+      credits: 'Credits',
+      back: 'Back',
+      // setup
+      matchSetup: 'Match Setup',
+      opponent: 'Opponent',
+      cpuLevel: 'CPU Level',
+      winScore: 'Points to Win',
+      format: 'Format',
+      timer: 'Time Limit',
+      off: 'Off',
+      on: 'On',
+      single: 'Single Match',
+      bestOf: 'Best of {0}',
+      seconds: '{0} s',
+      chooseStage: 'Choose Stage  ▶',
+      human: 'Human (P2 keys)',
+      dummy: 'Training Dummy',
+      level: 'Level {0}',
+      lvNames: ['', 'Rookie', 'Easy', 'Normal', 'Hard', 'Master'],
+      // stage select
+      stageSelect: 'Stage Select',
+      stageHint: '← → Choose   Enter Fight!   Esc Back',
+      tag_classic: 'CLASSIC',
+      tag_moving: 'MOVING PLATFORMS',
+      tag_wide: 'WIDE · SCROLLING',
+      // settings
+      musicVol: 'Music Volume',
+      sfxVol: 'Sound Volume',
+      mute: 'Mute All',
+      battleMusic: 'Battle Music',
+      shake: 'Screen Shake',
+      labels: 'Player Tags',
+      display: 'Display Size',
+      fit: 'Fit Window',
+      fullscreen: 'Fullscreen',
+      language: 'Language',
+      controls: 'Controls  ▶',
+      resetDefaults: 'Reset to Defaults',
+      resetDone: 'Settings reset',
+      // controls
+      controlsTitle: 'Controls',
+      moveLeft: 'Move Left',
+      moveRight: 'Move Right',
+      jump: 'Jump',
+      pressKey: 'Press a key…  (Esc cancels)',
+      resetControls: 'Reset Controls',
+      controlsHint: 'Enter: rebind   Esc: back',
+      // pause
+      paused: 'Paused',
+      resume: 'Resume',
+      restart: 'Restart Match',
+      mainMenu: 'Main Menu',
+      // results
+      wins: '{0} WINS!',
+      rematch: 'Rematch',
+      changeStage: 'Change Stage',
+      finalScore: 'Final Score',
+      rounds: 'Rounds',
+      matchTime: 'Match Time',
+      stomps: 'Stomps',
+      bestStreak: 'Best Streak',
+      // hud
+      round: 'ROUND {0}',
+      finalRound: 'FINAL ROUND',
+      go: 'GO!',
+      matchPoint: 'MATCH POINT',
+      suddenDeath: 'SUDDEN DEATH',
+      suddenSub: 'Next stomp wins!',
+      timeUp: 'TIME!',
+      roundTo: '{0} takes the round',
+      winsRound: '{0} WINS',
+      practiceTag: 'PRACTICE',
+      practiceHint: 'Esc: pause / menu',
+      cpu: 'CPU',
+      focusLost: 'Paused — window lost focus',
+      // menu hints
+      menuHint: '↑↓ Select   ←→ Change   Enter OK   Esc Back',
+      // how to play
+      howPages: [
+        {
+          title: 'Goal',
+          lines: [
+            'Jump on your rival\'s HEAD to score a point.',
+            'Bumping into each other from the side scores nothing —',
+            'you just push each other back.',
+            'First to the target score wins (5 by default).',
+          ],
+        },
+        {
+          title: 'Controls',
+          lines: ['{p1}', '{p2}', 'Esc: pause      F1: debug info', 'Menus: arrow keys / WASD, Enter, Esc',
+            'Controllers: D-pad / stick move, A or B jump, Start pause', 'Touch screens: on-screen buttons in matches'],
+        },
+        {
+          title: 'Tips',
+          lines: [
+            'Hold jump to jump higher, tap it for a short hop.',
+            'Hold jump while stomping to bounce higher.',
+            'Jumps are buffered and you get a moment of "coyote time"',
+            'after running off a ledge.',
+            'After being stomped you blink for 1.5 s: you cannot be',
+            'stomped — but you CAN still stomp!',
+            'Platforms can be jumped through from below.',
+            'Moving platforms carry you with them.',
+          ],
+        },
+      ],
+      page: 'Page {0}/{1}   ← → turn   Esc back',
+      creditsLines: [
+        'STOMP DUEL',
+        '',
+        'Game design & programming — Hanakawalab AIdev',
+        'Characters: Ember (P1) and Tide (P2)',
+        '',
+        'All graphics are drawn in code (HTML5 Canvas).',
+        'All music and sound are synthesized live (Web Audio).',
+        'No external assets, no dependencies.',
+        '',
+        'Thanks for playing!',
+      ],
+      p1Line: 'P1 (Red ▲):  {0} / {1} move    {2} jump',
+      p2Line: 'P2 (Blue ●):  {0} / {1} move    {2} jump',
+      tapStart: 'Tap to start',
+      // devices
+      padOn: 'Controller {0} connected',
+      padOff: 'Controller {0} disconnected',
+      // online
+      online: 'Online / Wi-Fi',
+      onlineTitle: 'Online Play',
+      createRoom: 'Create Room',
+      joinRoom: 'Join Room',
+      onlineInfo: [
+        'Each player uses their own device (PC, tablet or phone).',
+        'One computer runs the game server:  node server.js',
+        'Everyone opens the address it prints, in a browser.',
+        'Create a room on one device, join with its code on the other.',
+      ],
+      noServerInfo: 'This page was not opened from the game server, so online play is off.',
+      noServer: 'Online needs the game server',
+      otherDevices: 'Other devices open:  {0}',
+      enterCode: 'Enter the 4-digit room code',
+      joinHint: '0–9 type   Backspace delete   Enter join   Esc back',
+      connecting: 'Connecting…',
+      joining: 'Joining room {0}…',
+      roomCode: 'ROOM CODE',
+      waitingOpp: 'Waiting for an opponent…',
+      shareHint: 'On the other device, open this address:',
+      orJoin: '…or choose Online → Join Room and enter the code.',
+      cancel: 'Cancel',
+      leaveMatch: 'Leave Match',
+      pausedBy: 'Paused by {0}',
+      oppLeft: 'Your opponent left',
+      connLost: 'Connection lost',
+      roomNotFound: 'Room not found',
+      roomFull: 'That room is already playing',
+      badVersion: 'Game versions do not match',
+      serverBusy: 'Server is full, try later',
+      waitRematch: 'Waiting for opponent… ({0}/2)',
+      you: 'YOU',
+      youWin: 'YOU WIN!',
+      youLose: 'YOU LOSE',
+      onlineTag: 'ONLINE',
+    },
+    ja: {
+      subtitle: '1台のキーボードで遊ぶ 1v1 踏みつけバトル',
+      pressStart: 'Enter でスタート',
+      localVs: 'ふたりで対戦',
+      vsCpu: 'CPU と対戦',
+      practice: 'れんしゅう',
+      settings: '設定',
+      howTo: '遊び方',
+      credits: 'クレジット',
+      back: 'もどる',
+      matchSetup: '試合設定',
+      opponent: '相手',
+      cpuLevel: 'CPU レベル',
+      winScore: '先取点数',
+      format: '試合形式',
+      timer: '制限時間',
+      off: 'オフ',
+      on: 'オン',
+      single: '1本勝負',
+      bestOf: '{0}本勝負',
+      seconds: '{0} 秒',
+      chooseStage: 'ステージ選択  ▶',
+      human: 'ひと（P2 キー）',
+      dummy: '練習用ダミー',
+      level: 'レベル {0}',
+      lvNames: ['', 'ルーキー', 'かんたん', 'ふつう', 'むずかしい', 'マスター'],
+      stageSelect: 'ステージ選択',
+      stageHint: '← → 選択   Enter 決定   Esc もどる',
+      tag_classic: 'クラシック',
+      tag_moving: '動く足場',
+      tag_wide: 'ワイド・スクロール',
+      musicVol: '音楽の音量',
+      sfxVol: '効果音の音量',
+      mute: 'ミュート',
+      battleMusic: '試合中の音楽',
+      shake: '画面のゆれ',
+      labels: 'プレイヤー表示',
+      display: '画面サイズ',
+      fit: 'ウィンドウに合わせる',
+      fullscreen: 'フルスクリーン',
+      language: '言語 / Language',
+      controls: '操作設定  ▶',
+      resetDefaults: '初期設定にもどす',
+      resetDone: '設定をリセットしました',
+      controlsTitle: '操作設定',
+      moveLeft: '左に移動',
+      moveRight: '右に移動',
+      jump: 'ジャンプ',
+      pressKey: 'キーを押してください…（Esc でキャンセル）',
+      resetControls: '操作を初期化',
+      controlsHint: 'Enter：変更   Esc：もどる',
+      paused: 'ポーズ',
+      resume: 'つづける',
+      restart: 'やりなおす',
+      mainMenu: 'メインメニュー',
+      wins: '{0} の勝ち！',
+      rematch: '再戦',
+      changeStage: 'ステージ変更',
+      finalScore: '最終スコア',
+      rounds: 'ラウンド',
+      matchTime: '試合時間',
+      stomps: '踏みつけ',
+      bestStreak: '最大連続',
+      round: 'ラウンド {0}',
+      finalRound: 'ファイナルラウンド',
+      go: 'GO!',
+      matchPoint: 'マッチポイント',
+      suddenDeath: 'サドンデス',
+      suddenSub: '次に踏んだ方の勝ち！',
+      timeUp: 'タイムアップ！',
+      roundTo: '{0} がラウンド獲得',
+      winsRound: '{0} の勝ち',
+      practiceTag: 'れんしゅう',
+      practiceHint: 'Esc：ポーズ／メニュー',
+      cpu: 'CPU',
+      focusLost: 'ポーズ中 — ウィンドウが非アクティブになりました',
+      menuHint: '↑↓ 選択   ←→ 変更   Enter 決定   Esc もどる',
+      howPages: [
+        {
+          title: 'ルール',
+          lines: [
+            '相手の「頭」を踏むと1点。',
+            '横からぶつかっても点は入らず、押し合うだけ。',
+            '先に目標点（初期設定は5点）を取ったほうが勝ち。',
+          ],
+        },
+        {
+          title: '操作',
+          lines: ['{p1}', '{p2}', 'Esc：ポーズ      F1：デバッグ表示', 'メニュー：矢印キー / WASD、Enter、Esc',
+            'コントローラー：十字キー／スティック移動、A・B ジャンプ、Start ポーズ', 'タッチ画面：試合中に画面ボタンを表示'],
+        },
+        {
+          title: 'コツ',
+          lines: [
+            'ジャンプは長押しで高く、短く押すと低く跳ぶ。',
+            '踏みつけ時にジャンプを押し続けると高く跳ね返る。',
+            'ジャンプは先行入力OK。足場から落ちた直後も少しだけ跳べる。',
+            '踏まれた後は1.5秒点滅して無敵（踏まれない）。',
+            'ただし無敵中でも相手を踏むことはできる！',
+            '足場は下からすり抜けられる。',
+            '動く足場に乗ると一緒に運ばれる。',
+          ],
+        },
+      ],
+      page: 'ページ {0}/{1}   ← → めくる   Esc もどる',
+      creditsLines: [
+        'STOMP DUEL',
+        '',
+        'ゲームデザイン・プログラム — Hanakawalab AIdev',
+        'キャラクター：エンバー（P1）とタイド（P2）',
+        '',
+        'グラフィックはすべてコードで描画（HTML5 Canvas）。',
+        '音楽・効果音はすべてリアルタイム合成（Web Audio）。',
+        '外部素材・外部ライブラリは使っていません。',
+        '',
+        '遊んでくれてありがとう！',
+      ],
+      p1Line: 'P1（赤 ▲）：{0} / {1} 移動    {2} ジャンプ',
+      p2Line: 'P2（青 ●）：{0} / {1} 移動    {2} ジャンプ',
+      tapStart: 'タップでスタート',
+      padOn: 'コントローラー {0} を接続しました',
+      padOff: 'コントローラー {0} が切断されました',
+      online: 'オンライン / Wi-Fi',
+      onlineTitle: 'オンライン対戦',
+      createRoom: 'ルームを作る',
+      joinRoom: 'ルームに参加',
+      onlineInfo: [
+        'それぞれ自分の端末（PC・タブレット・スマホ）で遊びます。',
+        '1台のPCでゲームサーバーを起動： node server.js',
+        '表示されたアドレスを各端末のブラウザで開きます。',
+        '片方でルームを作り、もう片方はコードを入力して参加。',
+      ],
+      noServerInfo: 'このページはゲームサーバーから開かれていないため、オンライン対戦は使えません。',
+      noServer: 'オンラインにはサーバーが必要です',
+      otherDevices: 'ほかの端末で開く：  {0}',
+      enterCode: '4けたのルームコードを入力',
+      joinHint: '0〜9 入力   Backspace 消す   Enter 参加   Esc もどる',
+      connecting: '接続中…',
+      joining: 'ルーム {0} に参加中…',
+      roomCode: 'ルームコード',
+      waitingOpp: '対戦相手を待っています…',
+      shareHint: 'もう1台の端末でこのアドレスを開く：',
+      orJoin: '…または「オンライン → ルームに参加」でコードを入力。',
+      cancel: 'キャンセル',
+      leaveMatch: '試合をぬける',
+      pausedBy: '{0} がポーズしました',
+      oppLeft: '相手が退出しました',
+      connLost: '接続が切れました',
+      roomNotFound: 'ルームが見つかりません',
+      roomFull: 'そのルームは対戦中です',
+      badVersion: 'ゲームのバージョンが違います',
+      serverBusy: 'サーバーが混雑しています',
+      waitRematch: '相手を待っています…（{0}/2）',
+      you: 'あなた',
+      youWin: 'あなたの勝ち！',
+      youLose: 'あなたの負け',
+      onlineTag: 'オンライン',
+    },
+  };
+
+  SG.LANGS = ['en', 'ja'];
+  SG.lang = 'en';
+  SG.t = function (key) {
+    const table = S[SG.lang] || S.en;
+    let s = key in table ? table[key] : S.en[key];
+    if (s === undefined) return key;
+    if (typeof s === 'string' && arguments.length > 1) {
+      for (let i = 1; i < arguments.length; i++) s = s.split('{' + (i - 1) + '}').join(String(arguments[i]));
+    }
+    return s;
+  };
+  SG.STRINGS = S;
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/stages.js
+// stages.js — stage definitions. Each stage lists its LEFT half (plus centred pieces);
+// entries with `mirror: true` get an automatically mirrored twin, so every stage is
+// left/right symmetric by construction (horizontal motion is mirrored too).
+//
+// move: { axis: 'x' | 'y', range: px, period: ticks, phase: ticks }
+//   axis x: platform travels `range` px away from its authored x (mirrored twin travels the other way)
+//   axis y: platform rises `range` px above its authored y and comes back
+//   Motion is a smoothstep ping-pong of the round tick counter → fully deterministic.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+
+  SG.STAGES = [
+    {
+      id: 'meadow',
+      theme: 'meadow',
+      name: { en: 'Green Meadow', ja: 'みどりの草原' },
+      desc: {
+        en: 'The original arena. Five fixed platforms, no surprises.',
+        ja: 'おなじみのステージ。動かない足場が5つ。',
+      },
+      tags: ['classic'],
+      width: 800,
+      groundY: 340,
+      spawnX: 150,
+      platforms: [
+        { x: 80, y: 260, w: 160, mirror: true },
+        { x: 320, y: 190, w: 160 },
+        { x: 120, y: 120, w: 120, mirror: true },
+      ],
+    },
+    {
+      id: 'docks',
+      theme: 'docks',
+      name: { en: 'Sunset Docks', ja: '夕焼けの桟橋' },
+      desc: {
+        en: 'Two rafts drift in and out. Time your jumps to the tide.',
+        ja: '2つのイカダが左右に行き来する。タイミングが勝負。',
+      },
+      tags: ['moving'],
+      width: 800,
+      groundY: 340,
+      spawnX: 150,
+      platforms: [
+        { x: 40, y: 270, w: 120, mirror: true },
+        { x: 170, y: 200, w: 110, mirror: true, move: { axis: 'x', range: 120, period: 300, phase: 0 } },
+        { x: 340, y: 120, w: 120 },
+        { x: 30, y: 140, w: 90, mirror: true },
+      ],
+    },
+    {
+      id: 'cavern',
+      theme: 'cavern',
+      name: { en: 'Crystal Cavern', ja: 'クリスタル洞窟' },
+      desc: {
+        en: 'Twin lifts carry fighters up and down. Ride them to strike from above.',
+        ja: '上下に動くリフトに乗って、上から踏みつけよう。',
+      },
+      tags: ['moving'],
+      width: 800,
+      groundY: 340,
+      spawnX: 150,
+      platforms: [
+        { x: 60, y: 290, w: 100, mirror: true, move: { axis: 'y', range: 150, period: 360, phase: 0 } },
+        { x: 330, y: 230, w: 140 },
+        { x: 200, y: 145, w: 100, mirror: true },
+        { x: 360, y: 80, w: 80 },
+      ],
+    },
+    {
+      id: 'neon',
+      theme: 'neon',
+      name: { en: 'Neon Rooftops', ja: 'ネオンの屋上' },
+      desc: {
+        en: 'A wide scrolling skyline with sliding and rising platforms.',
+        ja: 'スクロールする広いステージ。横と縦に動く足場あり。',
+      },
+      tags: ['wide', 'moving'],
+      width: 1200,
+      groundY: 340,
+      spawnX: 280,
+      platforms: [
+        { x: 110, y: 260, w: 150, mirror: true },
+        { x: 320, y: 190, w: 110, mirror: true, move: { axis: 'x', range: 90, period: 280, phase: 0 } },
+        { x: 540, y: 250, w: 120 },
+        { x: 550, y: 150, w: 100, move: { axis: 'y', range: 60, period: 240, phase: 0 } },
+        { x: 50, y: 150, w: 110, mirror: true },
+      ],
+    },
+  ];
+
+  SG.getStageDef = (id) => SG.STAGES.find((s) => s.id === id) || SG.STAGES[0];
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/sim.js
+// sim.js — deterministic match simulation. No DOM, no randomness, no wall-clock time.
+// Every call to stepWorld() advances exactly one 1/60 s tick from explicit per-player inputs.
+// Player physics and player-vs-player rules are identical to the Day 1 prototype;
+// the only additions are moving-platform carrying, rounds/timer and presentation events.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+  const C = SG.C;
+  const clamp = SG.clamp;
+
+  // ===== Stage / platforms =====
+  function motionOffset(m, time) {
+    const t = (((time + m.phase) % m.period) + m.period) % m.period;
+    const u = t / m.period;
+    const tri = u < 0.5 ? u * 2 : 2 - u * 2;
+    return m.range * (tri * tri * (3 - 2 * tri)); // smoothstep ping-pong in [0, range]
+  }
+
+  function placePlatform(pl, time) {
+    if (!pl.move) {
+      pl.x = pl.baseX;
+      pl.y = pl.baseY;
+    } else if (pl.move.axis === 'x') {
+      pl.x = pl.baseX + pl.move.dir * motionOffset(pl.move, time);
+      pl.y = pl.baseY;
+    } else {
+      pl.x = pl.baseX;
+      pl.y = pl.baseY - motionOffset(pl.move, time);
+    }
+  }
+
+  SG.buildStage = function (def) {
+    const W = def.width;
+    const platforms = [];
+    const add = (src, mirrored) => {
+      const x = mirrored ? W - src.x - src.w : src.x;
+      const move = src.move
+        ? {
+            axis: src.move.axis,
+            range: src.move.range,
+            period: src.move.period,
+            phase: src.move.phase || 0,
+            dir: src.move.axis === 'x' && mirrored ? -1 : 1,
+          }
+        : null;
+      platforms.push({ baseX: x, baseY: src.y, w: src.w, h: C.PLATFORM_H, move, x, y: src.y, prevX: x, prevY: src.y, dx: 0, dy: 0 });
+    };
+    for (const p of def.platforms) {
+      add(p, false);
+      if (p.mirror) add(p, true);
+    }
+    const stage = {
+      def,
+      id: def.id,
+      width: W,
+      groundY: def.groundY,
+      platforms,
+      spawns: [def.spawnX, W - def.spawnX - C.PLAYER_W],
+      scrolling: W > C.VIEW_W,
+    };
+    SG.resetPlatforms(stage, 0);
+    return stage;
+  };
+
+  SG.resetPlatforms = function (stage, time) {
+    for (const pl of stage.platforms) {
+      placePlatform(pl, time);
+      pl.prevX = pl.x;
+      pl.prevY = pl.y;
+      pl.dx = 0;
+      pl.dy = 0;
+    }
+  };
+
+  SG.updatePlatforms = function (stage, time) {
+    for (const pl of stage.platforms) {
+      pl.prevX = pl.x;
+      pl.prevY = pl.y;
+      placePlatform(pl, time);
+      pl.dx = pl.x - pl.prevX;
+      pl.dy = pl.y - pl.prevY;
+    }
+  };
+
+  // ===== Players =====
+  SG.createPlayer = function (index, stage) {
+    const p = { index, w: C.PLAYER_W, h: C.PLAYER_H, score: 0, invuln: 0 };
+    SG.spawnPlayer(p, stage);
+    return p;
+  };
+
+  SG.spawnPlayer = function (p, stage) {
+    p.x = stage.spawns[p.index];
+    p.y = stage.groundY - p.h;
+    p.vx = 0;
+    p.vy = 0;
+    p.onGround = true;
+    p.facing = p.index === 0 ? 1 : -1;
+    p.coyote = C.COYOTE_TICKS;
+    p.jumpBuffer = 0;
+    p.riding = -1;
+    p.prevBottom = p.y + p.h;
+  };
+
+  // One player's movement: input → velocity → position → terrain. (Same order as Day 1.)
+  SG.stepPlayer = function (p, input, stage, canAct, ev) {
+    const wasGround = p.onGround;
+
+    // Moving platform carry (before own movement, so a rider keeps their footing).
+    if (p.riding >= 0) {
+      const pl = stage.platforms[p.riding];
+      p.x += pl.dx;
+      p.y = pl.y - p.h;
+    }
+    p.x = clamp(p.x, 0, stage.width - p.w);
+    p.prevBottom = p.y + p.h;
+
+    p.vx = 0;
+    if (canAct && input.left) p.vx -= C.MOVE_SPEED;
+    if (canAct && input.right) p.vx += C.MOVE_SPEED;
+    if (p.vx !== 0) p.facing = Math.sign(p.vx);
+    p.x = clamp(p.x + p.vx, 0, stage.width - p.w);
+
+    if (canAct && input.jumpPressed) p.jumpBuffer = C.JUMP_BUFFER_TICKS;
+    if (p.jumpBuffer > 0 && p.coyote > 0) {
+      p.vy = -C.JUMP_POWER;
+      p.onGround = false;
+      p.coyote = 0;
+      p.jumpBuffer = 0;
+      if (ev) ev.push({ type: 'jump', who: p.index });
+    }
+    if (!input.jumpHeld && p.vy < 0) p.vy *= C.JUMP_CUT;
+
+    p.vy = Math.min(p.vy + C.GRAVITY, C.MAX_FALL);
+    p.y += p.vy;
+
+    const rodeOn = p.riding;
+    const impact = p.vy;
+    p.onGround = false;
+    p.riding = -1;
+    const bottom = p.y + p.h;
+    if (bottom >= stage.groundY) {
+      p.y = stage.groundY - p.h;
+      p.vy = 0;
+      p.onGround = true;
+    } else if (p.vy >= 0) {
+      // One-way platforms: land only when coming from above (pass through from below).
+      let best = -1;
+      for (let i = 0; i < stage.platforms.length; i++) {
+        const pl = stage.platforms[i];
+        if (!(p.x + p.w > pl.x && p.x < pl.x + pl.w)) continue;
+        const topBefore = i === rodeOn ? pl.y : pl.prevY;
+        if (p.prevBottom <= topBefore && bottom >= pl.y && (best < 0 || pl.y < stage.platforms[best].y)) best = i;
+      }
+      if (best >= 0) {
+        p.y = stage.platforms[best].y - p.h;
+        p.vy = 0;
+        p.onGround = true;
+        p.riding = best;
+      }
+    }
+    if (ev && p.onGround && !wasGround) ev.push({ type: 'land', who: p.index, speed: impact });
+
+    p.coyote = p.onGround ? C.COYOTE_TICKS : Math.max(0, p.coyote - 1);
+    p.jumpBuffer = Math.max(0, p.jumpBuffer - 1);
+    if (p.invuln > 0) p.invuln--;
+  };
+
+  const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  SG.overlaps = overlaps;
+
+  // Stomp: was above the victim's head last tick, is falling, and the victim is not invulnerable.
+  const isStomp = (top, bottom) => top.vy > 0 && top.prevBottom <= bottom.y + C.STOMP_TOLERANCE && bottom.invuln === 0;
+  SG.isStomp = isStomp;
+
+  // Player-vs-player, evaluated once after BOTH players moved (no update-order advantage).
+  SG.resolvePlayers = function (a, b, stage, ev) {
+    if (!overlaps(a, b)) return null;
+    const aStomps = isStomp(a, b);
+    const bStomps = isStomp(b, a);
+    if (aStomps !== bStomps) {
+      const top = aStomps ? a : b;
+      const bottom = aStomps ? b : a;
+      const hitX = bottom.x + bottom.w / 2;
+      const hitY = bottom.y;
+      const victimFacing = bottom.facing;
+      top.vy = -C.STOMP_BOUNCE;
+      top.onGround = false;
+      top.coyote = 0;
+      top.riding = -1;
+      SG.spawnPlayer(bottom, stage);
+      bottom.invuln = C.RESPAWN_INVULN;
+      if (ev) ev.push({ type: 'stomp', top: top.index, bottom: bottom.index, x: hitX, y: hitY, facing: victimFacing });
+      return { top: top.index, bottom: bottom.index };
+    }
+    // Not a stomp → push apart by half the overlap each (fair).
+    const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+    const dir = a.x + a.w / 2 <= b.x + b.w / 2 ? -1 : 1;
+    a.x += (dir * overlapX) / 2;
+    b.x -= (dir * overlapX) / 2;
+    a.x = clamp(a.x, 0, stage.width - a.w);
+    b.x = clamp(b.x, 0, stage.width - b.w);
+    if (ev) ev.push({ type: 'bump', x: (a.x + b.x + a.w) / 2, y: Math.max(a.y, b.y) + 20, strength: overlapX });
+    return null;
+  };
+
+  // ===== Match / rounds =====
+  // opts: { stageId, mode, winScore (0 = endless), bestOf (1/3/5), timeLimit (s, 0 = off), cpuLevel }
+  SG.createWorld = function (opts) {
+    const o = Object.assign({ stageId: 'meadow', mode: 'versus', winScore: 5, bestOf: 1, timeLimit: 0, cpuLevel: 3 }, opts || {});
+    const stage = SG.buildStage(SG.getStageDef(o.stageId));
+    const w = {
+      opts: o,
+      stage,
+      players: [SG.createPlayer(0, stage), SG.createPlayer(1, stage)],
+      roundWins: [0, 0],
+      round: 1,
+      matchWinner: -1,
+      totalTicks: 0,
+      stats: { stomps: [0, 0], longestStreak: [0, 0], streak: [0, 0] },
+      events: [],
+    };
+    startRound(w);
+    return w;
+  };
+
+  SG.roundsToWin = (w) => Math.ceil((w.opts.bestOf || 1) / 2);
+
+  function startRound(w) {
+    w.phase = 'countdown';
+    w.countdown = C.COUNTDOWN_TICKS;
+    w.tick = 0;
+    w.time = 0;
+    w.phaseTimer = 0;
+    w.suddenDeath = false;
+    w.roundWinner = -1;
+    w.endReason = '';
+    w.stats.streak = [0, 0];
+    SG.resetPlatforms(w.stage, 0);
+    for (const p of w.players) {
+      p.score = 0;
+      p.invuln = 0;
+      SG.spawnPlayer(p, w.stage);
+    }
+    w.events.push({ type: 'roundStart', round: w.round });
+  }
+
+  function endRound(w, winner, reason) {
+    w.phase = 'roundEnd';
+    w.phaseTimer = 0;
+    w.roundWinner = winner;
+    w.endReason = reason;
+    w.roundWins[winner]++;
+    if (w.roundWins[winner] >= SG.roundsToWin(w)) w.matchWinner = winner;
+    w.events.push({ type: 'roundEnd', winner, reason, matchOver: w.matchWinner >= 0 });
+  }
+
+  SG.stepWorld = function (w, inputs) {
+    w.events = [];
+    const ev = w.events;
+
+    if (w.phase === 'countdown') {
+      w.countdown--;
+      if (w.countdown <= 0) {
+        w.phase = 'playing';
+        ev.push({ type: 'go' });
+      } else if (w.countdown % C.TICK_RATE === 0) {
+        ev.push({ type: 'count', n: w.countdown / C.TICK_RATE });
+      }
+    } else if (w.phase === 'playing') {
+      w.tick++;
+      w.totalTicks++;
+      const limit = (w.opts.timeLimit || 0) * C.TICK_RATE;
+      if (limit > 0 && !w.suddenDeath && w.tick >= limit) {
+        const [a, b] = w.players;
+        if (a.score !== b.score) endRound(w, a.score > b.score ? 0 : 1, 'time');
+        else {
+          w.suddenDeath = true;
+          ev.push({ type: 'suddenDeath' });
+        }
+      }
+    } else {
+      w.phaseTimer++;
+    }
+
+    const canAct = w.phase === 'playing';
+    w.time++;
+    SG.updatePlatforms(w.stage, w.time);
+    const NO = SG.NO_INPUT;
+    SG.stepPlayer(w.players[0], (inputs && inputs[0]) || NO, w.stage, canAct, ev);
+    SG.stepPlayer(w.players[1], (inputs && inputs[1]) || NO, w.stage, canAct, ev);
+
+    if (canAct) {
+      const hit = SG.resolvePlayers(w.players[0], w.players[1], w.stage, ev);
+      if (hit) {
+        const top = w.players[hit.top];
+        top.score++;
+        const s = w.stats;
+        s.stomps[hit.top]++;
+        s.streak[hit.top]++;
+        s.streak[hit.bottom] = 0;
+        s.longestStreak[hit.top] = Math.max(s.longestStreak[hit.top], s.streak[hit.top]);
+        ev.push({ type: 'score', who: hit.top, score: top.score });
+        const winScore = w.opts.winScore || 0;
+        if (w.suddenDeath) endRound(w, hit.top, 'sudden');
+        else if (winScore > 0 && top.score >= winScore) endRound(w, hit.top, 'score');
+      }
+    }
+
+    if (w.phase === 'roundEnd' && w.phaseTimer >= C.ROUND_END_TICKS) {
+      if (w.matchWinner >= 0) {
+        w.phase = 'matchEnd';
+        w.phaseTimer = 0;
+        ev.push({ type: 'matchEnd', winner: w.matchWinner });
+      } else {
+        w.round++;
+        startRound(w);
+      }
+    }
+    return ev;
+  };
+
+  // Compact state fingerprint for determinism tests and the debug overlay.
+  SG.hashWorld = function (w) {
+    const r = (v) => Math.round(v * 1e6) / 1e6;
+    const ps = w.players.map((p) => [r(p.x), r(p.y), r(p.vx), r(p.vy), p.score, p.invuln, p.coyote, p.jumpBuffer, p.riding].join(','));
+    return [w.phase, w.tick, w.time, w.round, w.roundWins.join('/'), ps.join('|')].join(';');
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/ai.js
+// ai.js — CPU opponents. The AI produces the SAME input structure a human produces
+// ({left, right, jumpHeld, jumpPressed}) and goes through the same physics as everyone else.
+//
+// Fairness:
+//  - It sees the opponent only through a reaction-delay buffer of PAST snapshots.
+//  - It never reads the opponent's inputs.
+//  - It may "imagine" its own jump arcs with the public physics rules (like a player does), and
+//    extrapolate the opponent from the last snapshot it saw (level 5) — it never sees future states.
+//  - Difficulty changes reaction delay, decision rate, aim error, mistakes and strategy only.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+  const C = SG.C;
+
+  // level 0 = practice dummy (walks around, never attacks)
+  const LEVELS = {
+    0: { react: 30, interval: 40, err: 0, mistake: 0, plan: false, predict: false, dodge: 0, climb: false, invulnAware: false, awareness: 0, randomJump: 0, nearJump: 0 },
+    1: { react: 30, interval: 26, err: 70, mistake: 0.4, plan: false, predict: false, dodge: 0.05, climb: false, invulnAware: false, awareness: 260, randomJump: 0.1, nearJump: 0.25 },
+    2: { react: 22, interval: 16, err: 40, mistake: 0.3, plan: false, predict: false, dodge: 0.2, climb: false, invulnAware: false, awareness: 900, randomJump: 0.06, nearJump: 0.5 },
+    3: { react: 16, interval: 12, err: 22, mistake: 0.3, plan: true, options: 'basic', predict: false, dodge: 0.35, climb: true, invulnAware: false, awareness: 9999, randomJump: 0, nearJump: 0 },
+    4: { react: 9, interval: 6, err: 12, mistake: 0.12, plan: true, options: 'normal', predict: true, dodge: 0.75, climb: true, invulnAware: true, awareness: 9999, randomJump: 0, nearJump: 0 },
+    5: { react: 6, interval: 4, err: 5, mistake: 0.06, plan: true, options: 'full', predict: true, dodge: 0.9, climb: true, invulnAware: true, awareness: 9999, randomJump: 0, nearJump: 0 },
+  };
+  SG.AI_LEVELS = LEVELS;
+
+  const snap = (p) => ({
+    index: p.index, x: p.x, y: p.y, w: p.w, h: p.h, vx: p.vx, vy: p.vy, onGround: p.onGround,
+    invuln: p.invuln, riding: p.riding, facing: p.facing, coyote: p.coyote, jumpBuffer: p.jumpBuffer,
+    prevBottom: p.prevBottom, score: 0,
+  });
+
+  const mkInput = (dir, jumpHeld, jumpPressed) => ({ left: dir < 0, right: dir > 0, jumpHeld: !!jumpHeld, jumpPressed: !!jumpPressed });
+
+  function cloneStage(stage) {
+    return {
+      width: stage.width,
+      groundY: stage.groundY,
+      platforms: stage.platforms.map((pl) => ({
+        baseX: pl.baseX, baseY: pl.baseY, w: pl.w, h: pl.h, move: pl.move,
+        x: pl.x, y: pl.y, prevX: pl.prevX, prevY: pl.prevY, dx: pl.dx, dy: pl.dy,
+      })),
+    };
+  }
+
+  function resetClone(clone, stage) {
+    for (let i = 0; i < stage.platforms.length; i++) {
+      const s = stage.platforms[i];
+      const d = clone.platforms[i];
+      d.x = s.x; d.y = s.y; d.prevX = s.prevX; d.prevY = s.prevY; d.dx = s.dx; d.dy = s.dy;
+    }
+  }
+
+  function copyInto(dst, src) {
+    for (const k in src) dst[k] = src[k];
+    return dst;
+  }
+
+  SG.createAI = function (level, seed) {
+    const cfg = LEVELS[level] || LEVELS[3];
+    const rng = SG.makeRng((seed >>> 0) || 1);
+    const hist = [];
+    let plan = [];
+    let nav = SG.NO_INPUT;
+    let nextDecision = 0;
+    let t = 0;
+    let aimOffset = 0;
+    let wanderTarget = -1;
+    let stuck = 0;
+    let lastX = -1;
+    const ai = { level, cfg, mode: 'wait', planLen: 0, lastScore: 0 };
+
+    ai.reset = function () {
+      hist.length = 0;
+      plan = [];
+      nav = SG.NO_INPUT;
+      nextDecision = 0;
+      ai.mode = 'wait';
+    };
+
+    // Imagine one candidate action sequence for `ticks` ticks.
+    function simulate(world, self, opp, cand, sc) {
+      resetClone(sc, world.stage);
+      const me = copyInto({}, self);
+      const o = copyInto({}, opp);
+      const inputs = [];
+      const N = 48;
+      let score = -1;
+      for (let k = 0; k < N; k++) {
+        const myCx = me.x + me.w / 2;
+        const oCx = o.x + o.w / 2;
+        let dir = cand.dir;
+        if (k < cand.delay) dir = cand.walkDir;
+        else if (cand.dir === 2) dir = Math.abs(oCx - myCx) < 4 ? 0 : Math.sign(oCx - myCx);
+        const jk = k - cand.delay;
+        const input = mkInput(dir, cand.jump ? jk >= 0 && jk < cand.hold : k < cand.hold, cand.jump && jk === 0);
+        inputs.push(input);
+        SG.updatePlatforms(sc, world.time + 1 + k);
+        SG.stepPlayer(me, input, sc, true, null);
+        if (cfg.predict) SG.stepPlayer(o, mkInput(Math.sign(o.vx), o.vy < 0, false), sc, true, null);
+        else if (o.invuln > 0) o.invuln--;
+        if (SG.overlaps(me, o)) {
+          const iHit = me.vy > 0 && me.prevBottom <= o.y + C.STOMP_TOLERANCE;
+          const theyHit = cfg.predict && o.vy > 0 && o.prevBottom <= me.y + C.STOMP_TOLERANCE && me.invuln <= k;
+          if (theyHit && !iHit) { score = -1000; break; }
+          if (iHit) {
+            if (o.invuln > 0 && cfg.invulnAware) { score = -50; break; }
+            score = 1000 - k * 8 - cand.delay * 2;
+            inputs.length = k + 1;
+            break;
+          }
+        }
+      }
+      return { score, inputs };
+    }
+
+    function candidates(grounded, self) {
+      const out = [];
+      // Decision quality scales with level: more imagined options at higher levels.
+      const opt = cfg.options === 'full'
+        ? { delays: [0, 5, 10], holds: [3, 8, 14, 30], dirs: [2, -1, 1, 0] }
+        : cfg.options === 'normal'
+          ? { delays: [0, 6], holds: [4, 10, 30], dirs: [2, -1, 1] }
+          : { delays: [0], holds: [10, 30], dirs: [2] };
+      if (grounded) {
+        for (const delay of opt.delays) {
+          for (const hold of opt.holds) {
+            for (const dir of opt.dirs) out.push({ jump: true, delay, hold, dir, walkDir: 2 === dir ? 0 : dir });
+          }
+        }
+        out.push({ jump: false, delay: 0, hold: 0, dir: 2, walkDir: 0 });
+        out.push({ jump: false, delay: 0, hold: 0, dir: -1, walkDir: -1 });
+        out.push({ jump: false, delay: 0, hold: 0, dir: 1, walkDir: 1 });
+      } else {
+        const holdNow = self.vy < 0 ? 30 : 0;
+        for (const dir of [2, -1, 1, 0]) {
+          out.push({ jump: false, delay: 0, hold: holdNow, dir, walkDir: dir });
+          if (holdNow) out.push({ jump: false, delay: 0, hold: 0, dir, walkDir: dir });
+        }
+      }
+      // walkDir for "delay" phases of homing plans: walk toward the opponent
+      for (const c of out) if (c.dir === 2) c.walkDir = 3;
+      return out;
+    }
+
+    function fixWalkDir(cands, self, opp) {
+      const d = Math.sign(opp.x + opp.w / 2 - (self.x + self.w / 2));
+      for (const c of cands) if (c.walkDir === 3) c.walkDir = d;
+    }
+
+    function startJumpPlan(dirFn, hold, len) {
+      plan = [];
+      for (let k = 0; k < len; k++) plan.push({ dirFn, hold, k });
+    }
+
+    function walkInput(self, goalX, dead) {
+      const d = goalX - (self.x + self.w / 2);
+      return mkInput(Math.abs(d) < (dead || 6) ? 0 : Math.sign(d), false, false);
+    }
+
+    function decide(world, self, opp, me) {
+      const stage = world.stage;
+      const myCx = self.x + self.w / 2;
+      const oCx = opp.x + opp.w / 2;
+      const dx = oCx - myCx;
+      const myBottom = self.y + self.h;
+      const oBottom = opp.y + opp.h;
+      const grounded = self.onGround || self.coyote > 0;
+      aimOffset = (rng() * 2 - 1) * cfg.err;
+
+      // --- Practice dummy: wander between random points, never jump.
+      if (level === 0) {
+        if (wanderTarget < 0 || Math.abs(wanderTarget - myCx) < 8 || rng() < 0.15) wanderTarget = 40 + rng() * (stage.width - 80);
+        nav = rng() < 0.3 ? SG.NO_INPUT : walkInput(self, wanderTarget, 8);
+        ai.mode = 'wander';
+        return;
+      }
+
+      // --- Defence: avoid being under a falling opponent, and avoid an invulnerable one.
+      const meSafe = cfg.invulnAware && self.invuln > 15;
+      const above = oBottom < self.y + 10 && Math.abs(dx) < 80 && opp.vy > -4 && self.y - oBottom < 170;
+      const dangerous = cfg.invulnAware && opp.invuln > 15 && Math.abs(dx) < 150 && oBottom <= myBottom + 20;
+      if (!meSafe && (above || dangerous) && rng() < cfg.dodge) {
+        let away = dx > 0 ? -1 : 1;
+        if (dx === 0) away = myCx < stage.width / 2 ? 1 : -1;
+        if ((away < 0 && self.x < 30) || (away > 0 && self.x > stage.width - self.w - 30)) away = -away;
+        nav = mkInput(away, false, false);
+        ai.mode = 'evade';
+        return;
+      }
+
+      // --- Limited awareness (level 1): wander if the opponent is far away.
+      if (Math.abs(dx) > cfg.awareness) {
+        if (wanderTarget < 0 || Math.abs(wanderTarget - myCx) < 10) wanderTarget = 40 + rng() * (stage.width - 80);
+        nav = walkInput(self, wanderTarget);
+        if (grounded && rng() < cfg.randomJump) startJumpPlan(() => (nav.left ? -1 : nav.right ? 1 : 0), 10 + Math.floor(rng() * 20), 30);
+        ai.mode = 'wander';
+        return;
+      }
+
+      // --- Attack planning (levels 3–5): imagine jump arcs and commit to the best stomp.
+      if (cfg.plan && !(opp.invuln > 10 && cfg.invulnAware)) {
+        let o = opp;
+        if (cfg.predict) {
+          // Extrapolate the stale observation forward by the reaction delay using public physics.
+          const sc0 = cloneStage(stage);
+          o = copyInto({}, opp);
+          for (let k = 0; k < cfg.react; k++) {
+            SG.updatePlatforms(sc0, world.time - cfg.react + 1 + k);
+            SG.stepPlayer(o, mkInput(Math.sign(o.vx), o.vy < 0, false), sc0, true, null);
+          }
+        }
+        const sc = cloneStage(stage);
+        const cands = candidates(grounded, self);
+        fixWalkDir(cands, self, o);
+        let best = null;
+        let danger = false;
+        let safest = null;
+        for (const c of cands) {
+          const r = simulate(world, self, o, c, sc);
+          if (r.score === -1000) danger = true;
+          if (!best || r.score > best.score) best = r;
+          // safest non-attacking option: prefer not jumping / small moves (first listed wins ties)
+          if (r.score > -1000 && (!safest || r.score > safest.score)) safest = r;
+        }
+        ai.lastScore = best ? best.score : 0;
+        if (best && best.score <= 0 && danger && safest && rng() < cfg.dodge) {
+          // Some imagined futures end with me being stomped: take the safest one for a moment.
+          plan = safest.inputs.slice(0, 10);
+          ai.mode = 'defend';
+          return;
+        }
+        if (best && best.score > 0) {
+          if (rng() < cfg.mistake) {
+            // Mistimed: hesitate a few ticks before executing.
+            const wait = 3 + Math.floor(rng() * 10);
+            plan = [];
+            for (let k = 0; k < wait; k++) plan.push(SG.NO_INPUT);
+            plan = plan.concat(best.inputs);
+          } else {
+            plan = best.inputs.slice();
+          }
+          ai.mode = 'attack';
+          return;
+        }
+      }
+
+      // --- Simple attack (levels 1–2): jump when close and roughly level.
+      const adx = Math.abs(dx + aimOffset * 0.3);
+      if (!cfg.plan && grounded && adx > 34 && adx < 110 && Math.abs(oBottom - myBottom) < 30) {
+        if (rng() < cfg.nearJump) {
+          startJumpPlan(null, 6 + Math.floor(rng() * 9), 40);
+          ai.mode = 'attack';
+          return;
+        }
+      }
+
+      // --- Navigation.
+      let goalX = oCx + aimOffset;
+      ai.mode = 'chase';
+      if (oBottom < myBottom - 30) {
+        if (cfg.climb) {
+          // Find a reachable platform (they are one-way: jump up through it from below).
+          let bestPl = null;
+          let bestCost = Infinity;
+          for (const pl of stage.platforms) {
+            if (pl.y >= myBottom - 8 || pl.y < myBottom - 112) continue;
+            const pc = pl.x + pl.w / 2;
+            const cost = Math.abs(pc - oCx) + Math.abs(pl.y - oBottom) * 0.6 + Math.abs(pc - myCx) * 0.4;
+            if (cost < bestCost) { bestCost = cost; bestPl = pl; }
+          }
+          if (bestPl) {
+            const inside = myCx > bestPl.x + 8 && myCx < bestPl.x + bestPl.w - 8;
+            const near = myCx > bestPl.x - 40 && myCx < bestPl.x + bestPl.w + 40;
+            if (grounded && (inside || near)) {
+              const target = SG.clamp(oCx, bestPl.x + 12, bestPl.x + bestPl.w - 12);
+              startJumpPlan((s) => {
+                const d = target - (s.x + s.w / 2);
+                return Math.abs(d) < 5 ? 0 : Math.sign(d);
+              }, 30, 36);
+              ai.mode = 'climb';
+              return;
+            }
+            goalX = SG.clamp(myCx, bestPl.x + 15, bestPl.x + bestPl.w - 15);
+            ai.mode = 'climb';
+          }
+        } else if (grounded && rng() < 0.3 && Math.abs(dx) < 140) {
+          startJumpPlan(null, 30, 36);
+          ai.mode = 'hop';
+          return;
+        }
+      } else if (oBottom > myBottom + 30 && self.riding >= 0) {
+        // Opponent is below: walk off the platform edge closest to them.
+        const pl = stage.platforms[self.riding];
+        if (Math.abs(dx) < pl.w) goalX = dx < 0 ? pl.x - 20 : pl.x + pl.w + 20;
+        ai.mode = 'drop';
+      }
+      nav = walkInput(self, goalX);
+      if (!cfg.plan && grounded && rng() < cfg.randomJump) startJumpPlan(null, 8 + Math.floor(rng() * 22), 30);
+    }
+
+    // Called once per simulation tick for player index `me`.
+    ai.think = function (world, me) {
+      const self = world.players[me];
+      const oppNow = world.players[1 - me];
+      hist.push(snap(oppNow));
+      if (hist.length > 64) hist.shift();
+      t++;
+      if (world.phase !== 'playing') {
+        plan = [];
+        nav = SG.NO_INPUT;
+        nextDecision = t + Math.floor(cfg.react / 2);
+        ai.mode = 'wait';
+        return SG.NO_INPUT;
+      }
+      const opp = hist[Math.max(0, hist.length - 1 - cfg.react)];
+
+      // Unstick: walking into a wall for a while → hop.
+      if (Math.abs(self.x - lastX) < 0.01 && (nav.left || nav.right) && plan.length === 0) stuck++;
+      else stuck = 0;
+      lastX = self.x;
+      if (stuck > 20 && (self.onGround || self.coyote > 0) && level > 0) {
+        stuck = 0;
+        startJumpPlan(null, 30, 30);
+      }
+
+      const replan = cfg.plan && level >= 4 && t >= nextDecision;
+      if (plan.length && !(replan && ai.mode !== 'attack')) {
+        const step = plan.shift();
+        ai.planLen = plan.length;
+        if (step && step.k !== undefined) {
+          // Lazily evaluated jump plan step.
+          const myCx = self.x + self.w / 2;
+          const d = step.dirFn ? step.dirFn(self) : Math.abs(opp.x + opp.w / 2 - myCx) < 5 ? 0 : Math.sign(opp.x + opp.w / 2 - myCx);
+          return mkInput(d, step.k < step.hold, step.k === 0);
+        }
+        return step;
+      }
+      if (t >= nextDecision) {
+        plan = [];
+        nextDecision = t + cfg.interval + Math.floor(rng() * Math.max(1, cfg.interval / 2));
+        decide(world, self, opp, me);
+        if (plan.length) return ai.think.continuePlan(self, opp);
+      }
+      ai.planLen = plan.length;
+      return { left: nav.left, right: nav.right, jumpHeld: false, jumpPressed: false };
+    };
+
+    ai.think.continuePlan = function (self, opp) {
+      const step = plan.shift();
+      ai.planLen = plan.length;
+      if (step && step.k !== undefined) {
+        const myCx = self.x + self.w / 2;
+        const d = step.dirFn ? step.dirFn(self) : Math.abs(opp.x + opp.w / 2 - myCx) < 5 ? 0 : Math.sign(opp.x + opp.w / 2 - myCx);
+        return mkInput(d, step.k < step.hold, step.k === 0);
+      }
+      return step || SG.NO_INPUT;
+    };
+
+    return ai;
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/net.js
+// net.js — network protocol shared by the browser client and the Node server (DOM-free).
+//
+// Netcode model ("server-clocked input relay"):
+//   * Each device sends its own player's input (held buttons + a jump-press counter) to the server.
+//   * The server owns the 60 Hz clock. Every tick it takes the latest input of both players, steps its
+//     own copy of the deterministic simulation, and broadcasts that tick's two inputs to both devices.
+//   * Both devices run the same simulation from the same input stream, so they show the same match.
+//     Every HASH_EVERY ticks the server attaches a state fingerprint; a device that disagrees asks for
+//     the full state (resync).
+//   * Both players' inputs go through the same server hop, so neither side gets a latency advantage
+//     from hosting.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+
+  SG.NET = Object.freeze({
+    PROTOCOL: 1,
+    HASH_EVERY: 60, // ticks between state fingerprints
+    CODE_LEN: 4, // room codes are 4 digits
+    START_BUFFER: 2, // frames a device collects before it starts playing them
+    CATCH_UP: 6, // above this many queued frames, play 2 per tick
+    FAST_FORWARD: 20, // above this many, jump to the newest frames
+    PING_EVERY: 120, // ticks between latency measurements
+    POST_MATCH_TICKS: 90, // the server keeps ticking this long after matchEnd (results animations)
+  });
+
+  const BIT_LEFT = 1;
+  const BIT_RIGHT = 2;
+  const BIT_HELD = 4;
+  const BIT_PRESSED = 8;
+
+  // Held buttons → bits (what a device sends).
+  SG.packHeld = function (inp) {
+    return (inp.left ? BIT_LEFT : 0) | (inp.right ? BIT_RIGHT : 0) | (inp.jumpHeld ? BIT_HELD : 0);
+  };
+  // One player's input for one tick → bits (what the server broadcasts).
+  SG.packInput = function (inp) {
+    return SG.packHeld(inp) | (inp.jumpPressed ? BIT_PRESSED : 0);
+  };
+  SG.unpackInput = function (bits) {
+    return {
+      left: (bits & BIT_LEFT) !== 0,
+      right: (bits & BIT_RIGHT) !== 0,
+      jumpHeld: (bits & BIT_HELD) !== 0,
+      jumpPressed: (bits & BIT_PRESSED) !== 0,
+    };
+  };
+
+  SG.validRoomCode = function (code) {
+    return typeof code === 'string' && /^[0-9]{4}$/.test(code);
+  };
+
+  // The server only accepts these rules (same choices as the local match setup).
+  SG.sanitizeOnlineOpts = function (o) {
+    o = o && typeof o === 'object' ? o : {};
+    const int = (v, lo, hi, def) => (Number.isInteger(v) && v >= lo && v <= hi ? v : def);
+    return {
+      stageId: SG.STAGES.some((s) => s.id === o.stageId) ? o.stageId : 'meadow',
+      mode: 'online',
+      winScore: int(o.winScore, 1, 10, 5),
+      bestOf: [1, 3, 5].includes(o.bestOf) ? o.bestOf : 1,
+      timeLimit: [0, 60, 90, 120].includes(o.timeLimit) ? o.timeLimit : 0,
+      cpuLevel: null,
+    };
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/game.js
+// game.js — application state machine (screens, match sessions, pause, settings, input routing).
+// DOM-free: presentation (audio, effects, display) is reached only through `hooks`, so the whole
+// flow can be driven by tests in Node.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+  const C = SG.C;
+
+  const DEFAULT_KEYS = {
+    p1: { left: 'KeyA', right: 'KeyD', jump: 'KeyW' },
+    p2: { left: 'ArrowLeft', right: 'ArrowRight', jump: 'ArrowUp' },
+  };
+  const RESERVED_KEYS = ['Escape', 'F1'];
+
+  SG.defaultSettings = function (lang) {
+    return {
+      version: 1,
+      musicVol: 6,
+      sfxVol: 8,
+      mute: false,
+      battleMusic: true,
+      shake: true,
+      labels: true,
+      scale: 'fit', // 'fit' | 1 | 2
+      lang: lang || 'en',
+      keys: JSON.parse(JSON.stringify(DEFAULT_KEYS)),
+      setup: { mode: 'versus', winScore: 5, bestOf: 1, timer: 0, cpuLevel: 3, practiceOpp: 0, stageId: 'meadow' },
+    };
+  };
+
+  // Merge stored settings over defaults, validating every field (corrupt storage never breaks the game).
+  SG.sanitizeSettings = function (raw, lang) {
+    const d = SG.defaultSettings(lang);
+    if (!raw || typeof raw !== 'object') return d;
+    const int = (v, lo, hi, def) => (Number.isInteger(v) && v >= lo && v <= hi ? v : def);
+    const bool = (v, def) => (typeof v === 'boolean' ? v : def);
+    d.musicVol = int(raw.musicVol, 0, 10, d.musicVol);
+    d.sfxVol = int(raw.sfxVol, 0, 10, d.sfxVol);
+    d.mute = bool(raw.mute, d.mute);
+    d.battleMusic = bool(raw.battleMusic, d.battleMusic);
+    d.shake = bool(raw.shake, d.shake);
+    d.labels = bool(raw.labels, d.labels);
+    d.scale = ['fit', 1, 2].includes(raw.scale) ? raw.scale : d.scale;
+    d.lang = SG.LANGS.includes(raw.lang) ? raw.lang : d.lang;
+    if (raw.keys && typeof raw.keys === 'object') {
+      for (const pl of ['p1', 'p2']) {
+        for (const a of ['left', 'right', 'jump']) {
+          const v = raw.keys[pl] && raw.keys[pl][a];
+          if (typeof v === 'string' && v.length < 40 && !RESERVED_KEYS.includes(v)) d.keys[pl][a] = v;
+        }
+      }
+      const all = ['p1', 'p2'].flatMap((pl) => ['left', 'right', 'jump'].map((a) => d.keys[pl][a]));
+      if (new Set(all).size !== all.length) d.keys = JSON.parse(JSON.stringify(DEFAULT_KEYS));
+    }
+    const s = raw.setup || {};
+    d.setup.mode = ['versus', 'cpu', 'practice', 'online'].includes(s.mode) ? s.mode : d.setup.mode;
+    d.setup.winScore = int(s.winScore, 1, 10, d.setup.winScore);
+    d.setup.bestOf = [1, 3, 5].includes(s.bestOf) ? s.bestOf : d.setup.bestOf;
+    d.setup.timer = [0, 60, 90, 120].includes(s.timer) ? s.timer : d.setup.timer;
+    d.setup.cpuLevel = int(s.cpuLevel, 1, 5, d.setup.cpuLevel);
+    d.setup.practiceOpp = s.practiceOpp === 'human' ? 'human' : int(s.practiceOpp, 0, 5, d.setup.practiceOpp);
+    d.setup.stageId = SG.STAGES.some((st) => st.id === s.stageId) ? s.stageId : d.setup.stageId;
+    return d;
+  };
+
+  const NAV = {
+    up: ['ArrowUp', 'KeyW'],
+    down: ['ArrowDown', 'KeyS'],
+    left: ['ArrowLeft', 'KeyA'],
+    right: ['ArrowRight', 'KeyD'],
+    ok: ['Enter', 'NumpadEnter', 'Space'],
+    back: ['Escape', 'Backspace'],
+  };
+  // Gamepads arrive as virtual key codes "Pad<slot><Button>" (see main.js): D-pad/stick, A, B, Start.
+  const PAD_NAV = { Up: 'up', Down: 'down', Left: 'left', Right: 'right', A: 'ok', Start: 'ok', B: 'back' };
+  const PAD_RE = /^Pad([01])(Up|Down|Left|Right|A|B|Start)$/;
+  const isVirtual = (code) => /^(Pad|Touch)/.test(code);
+  const navOf = (code) => {
+    for (const k in NAV) if (NAV[k].includes(code)) return k;
+    const m = PAD_RE.exec(code);
+    return m ? PAD_NAV[m[2]] : null;
+  };
+  const isPauseKey = (code) => code === 'Escape' || code === 'TouchPause' || /^Pad[01]Start$/.test(code);
+  const DIGIT_RE = /^(?:Digit|Numpad)([0-9])$/;
+  // On-screen keypad of the Join Room screen (row-major, 3 columns).
+  SG.JOIN_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'];
+
+  const OVERLAY_LOCK_TICKS = 30; // ignore menu input right after an overlay appears mid-action
+  const noop = () => {};
+
+  SG.Game = function (hooks) {
+    const h = Object.assign(
+      {
+        sfx: noop, music: noop, duck: noop, applyAudio: noop, applyDisplay: noop,
+        toggleFullscreen: noop, isFullscreen: () => false,
+        load: () => null, save: noop,
+        onMatchStart: noop, onWorldEvents: noop, onTick: noop,
+        // Online: netConnect(onMessage, onClose) → { send(obj), close() } or null when no server is reachable.
+        netConnect: null, now: () => 0, shareUrls: () => [],
+      },
+      hooks || {}
+    );
+    const g = this;
+    g.hooks = h;
+    g.settings = SG.sanitizeSettings(h.load(), h.defaultLang);
+    SG.lang = g.settings.lang;
+    g.stack = ['title'];
+    g.cursor = {};
+    g.keys = Object.create(null);
+    g.pressed = Object.create(null);
+    g.session = null;
+    g.debug = false;
+    g.capture = null;
+    g.screenTicks = 0;
+    g.uiTicks = 0;
+    g.stageIndex = Math.max(0, SG.STAGES.findIndex((s) => s.id === g.settings.setup.stageId));
+    g.howPage = 0;
+    g.toast = null;
+    g.focusPaused = false;
+    g.matchCounter = 0;
+    g.net = null; // online connection state (see "online" below)
+    g.joinCode = '';
+    g.joinCursor = 0;
+    g.touchUI = false; // set by main.js once a touch screen is used
+    h.applyAudio(g.settings);
+    h.applyDisplay(g.settings);
+    g.updateMusic();
+  };
+
+  const P = SG.Game.prototype;
+
+  // ---------------------------------------------------------------- screens
+  P.top = function () { return this.stack[this.stack.length - 1]; };
+
+  P.go = function (screen, replace) {
+    if (replace) this.stack[this.stack.length - 1] = screen;
+    else this.stack.push(screen);
+    this.enterScreen();
+  };
+  P.back = function () {
+    if (this.stack.length > 1) this.stack.pop();
+    this.enterScreen();
+  };
+  P.reset = function (screen) {
+    this.stack = [screen];
+    this.enterScreen();
+  };
+  P.enterScreen = function () {
+    this.screenTicks = 0;
+    this.capture = null;
+    this.clearPressed();
+    const items = this.menuItems();
+    if (items) {
+      const top = this.top();
+      if (this.cursor[top] === undefined || top === 'pause' || top === 'results') this.cursor[top] = this.defaultCursor(top, items);
+      this.cursor[top] = Math.min(this.cursor[top], items.length - 1);
+    }
+    this.updateMusic();
+  };
+  P.defaultCursor = function (screen, items) {
+    if (screen === 'setup') return items.findIndex((it) => it.id === 'next');
+    return 0;
+  };
+
+  P.clearPressed = function () { this.pressed = Object.create(null); };
+  P.releaseAll = function () {
+    this.keys = Object.create(null);
+    this.pressed = Object.create(null);
+  };
+
+  P.isMenuScreen = function (s) { return !['play', 'pause', 'results'].includes(s); };
+  P.inMatchStack = function () { return this.stack.includes('play'); };
+
+  P.updateMusic = function () {
+    const top = this.top();
+    let track = null;
+    if (!this.inMatchStack()) track = 'menu';
+    else if (this.stack.includes('results')) track = null;
+    else if (this.settings.battleMusic && this.session && this.session.world.phase !== 'matchEnd' && !this.session.musicStopped) track = 'battle';
+    this.hooks.music(track);
+    this.hooks.duck(this.inMatchStack() && top !== 'play');
+  };
+
+  // ---------------------------------------------------------------- settings
+  P.saveSettings = function () {
+    this.settings.setup.stageId = SG.STAGES[this.stageIndex].id;
+    this.hooks.save(JSON.parse(JSON.stringify(this.settings)));
+  };
+  P.changeSetting = function (key, value) {
+    this.settings[key] = value;
+    if (key === 'lang') SG.lang = value;
+    this.hooks.applyAudio(this.settings);
+    this.hooks.applyDisplay(this.settings);
+    if (key === 'battleMusic') this.updateMusic();
+    this.saveSettings();
+  };
+  P.resetSettings = function () {
+    const lang = this.settings.lang;
+    const setup = this.settings.setup;
+    this.settings = SG.defaultSettings(lang);
+    this.settings.setup = setup;
+    SG.lang = lang;
+    this.hooks.applyAudio(this.settings);
+    this.hooks.applyDisplay(this.settings);
+    this.updateMusic();
+    this.saveSettings();
+    this.toast = { text: SG.t('resetDone'), ticks: 120 };
+  };
+  P.bindKey = function (pl, action, code) {
+    const k = this.settings.keys;
+    const old = k[pl][action];
+    for (const p2 of ['p1', 'p2']) {
+      for (const a of ['left', 'right', 'jump']) {
+        if (k[p2][a] === code && !(p2 === pl && a === action)) k[p2][a] = old; // swap on conflict
+      }
+    }
+    k[pl][action] = code;
+    this.saveSettings();
+  };
+
+  // ---------------------------------------------------------------- menus (model)
+  const cycle = (list, cur, dir) => {
+    let i = list.indexOf(cur);
+    if (i < 0) i = 0;
+    return list[(i + dir + list.length) % list.length];
+  };
+
+  P.menuItems = function () {
+    const g = this;
+    const s = g.settings;
+    const su = s.setup;
+    const t = SG.t;
+    switch (g.top()) {
+      case 'main':
+        return [
+          { id: 'versus', label: () => t('localVs'), ok: () => g.openSetup('versus') },
+          { id: 'cpu', label: () => t('vsCpu'), ok: () => g.openSetup('cpu') },
+          { id: 'practice', label: () => t('practice'), ok: () => g.openSetup('practice') },
+          { id: 'online', label: () => t('online'), ok: () => g.go('online') },
+          { id: 'settings', label: () => t('settings'), ok: () => g.go('settings') },
+          { id: 'howto', label: () => t('howTo'), ok: () => { g.howPage = 0; g.go('howto'); } },
+          { id: 'credits', label: () => t('credits'), ok: () => g.go('credits') },
+        ];
+      case 'setup': {
+        const items = [];
+        const mode = su.mode;
+        if (mode === 'cpu') {
+          items.push({ id: 'cpuLevel', label: () => t('cpuLevel'), value: () => t('level', su.cpuLevel) + '  ' + t('lvNames')[su.cpuLevel],
+            adjust: (d) => { su.cpuLevel = SG.clamp(su.cpuLevel + d, 1, 5); g.saveSettings(); } });
+        }
+        if (mode === 'practice') {
+          const opts = [0, 1, 2, 3, 4, 5, 'human'];
+          items.push({ id: 'practiceOpp', label: () => t('opponent'),
+            value: () => (su.practiceOpp === 0 ? t('dummy') : su.practiceOpp === 'human' ? t('human') : t('cpu') + ' ' + t('level', su.practiceOpp)),
+            adjust: (d) => { su.practiceOpp = cycle(opts, su.practiceOpp, d); g.saveSettings(); } });
+        } else {
+          items.push({ id: 'winScore', label: () => t('winScore'), value: () => String(su.winScore),
+            adjust: (d) => { su.winScore = SG.clamp(su.winScore + d, 1, 10); g.saveSettings(); } });
+          items.push({ id: 'bestOf', label: () => t('format'), value: () => (su.bestOf === 1 ? t('single') : t('bestOf', su.bestOf)),
+            adjust: (d) => { su.bestOf = cycle([1, 3, 5], su.bestOf, d); g.saveSettings(); } });
+          items.push({ id: 'timer', label: () => t('timer'), value: () => (su.timer === 0 ? t('off') : t('seconds', su.timer)),
+            adjust: (d) => { su.timer = cycle([0, 60, 90, 120], su.timer, d); g.saveSettings(); } });
+        }
+        items.push({ id: 'next', label: () => t('chooseStage'), ok: () => g.go('stage') });
+        items.push({ id: 'back', label: () => t('back'), ok: () => g.back() });
+        return items;
+      }
+      case 'settings': {
+        const onOff = (v) => (v ? t('on') : t('off'));
+        const toggle = (key) => () => g.changeSetting(key, !s[key]);
+        return [
+          { id: 'musicVol', label: () => t('musicVol'), slider: () => s.musicVol, adjust: (d) => g.changeSetting('musicVol', SG.clamp(s.musicVol + d, 0, 10)) },
+          { id: 'sfxVol', label: () => t('sfxVol'), slider: () => s.sfxVol, adjust: (d) => { g.changeSetting('sfxVol', SG.clamp(s.sfxVol + d, 0, 10)); g.hooks.sfx('menuMove'); } },
+          { id: 'mute', label: () => t('mute'), value: () => onOff(s.mute), adjust: toggle('mute'), ok: toggle('mute') },
+          { id: 'battleMusic', label: () => t('battleMusic'), value: () => onOff(s.battleMusic), adjust: toggle('battleMusic'), ok: toggle('battleMusic') },
+          { id: 'shake', label: () => t('shake'), value: () => onOff(s.shake), adjust: toggle('shake'), ok: toggle('shake') },
+          { id: 'labels', label: () => t('labels'), value: () => onOff(s.labels), adjust: toggle('labels'), ok: toggle('labels') },
+          { id: 'scale', label: () => t('display'), value: () => (s.scale === 'fit' ? t('fit') : s.scale + '×'),
+            adjust: (d) => g.changeSetting('scale', cycle(['fit', 1, 2], s.scale, d)) },
+          { id: 'fullscreen', label: () => t('fullscreen'), value: () => onOff(g.hooks.isFullscreen()),
+            adjust: () => g.hooks.toggleFullscreen(), ok: () => g.hooks.toggleFullscreen() },
+          { id: 'lang', label: () => t('language'), value: () => (s.lang === 'ja' ? '日本語' : 'English'),
+            adjust: (d) => g.changeSetting('lang', cycle(SG.LANGS, s.lang, d)), ok: () => g.changeSetting('lang', cycle(SG.LANGS, s.lang, 1)) },
+          { id: 'controls', label: () => t('controls'), ok: () => g.go('controls') },
+          { id: 'reset', label: () => t('resetDefaults'), ok: () => g.resetSettings() },
+          { id: 'back', label: () => t('back'), ok: () => g.back() },
+        ];
+      }
+      case 'controls': {
+        const items = [];
+        for (const pl of ['p1', 'p2']) {
+          for (const a of ['left', 'right', 'jump']) {
+            items.push({ id: pl + a, player: pl, action: a,
+              label: () => pl.toUpperCase() + '  ' + t(a === 'left' ? 'moveLeft' : a === 'right' ? 'moveRight' : 'jump'),
+              value: () => (g.capture && g.capture.player === pl && g.capture.action === a ? '…' : SG.keyName(s.keys[pl][a])),
+              ok: () => { g.capture = { player: pl, action: a }; } });
+          }
+        }
+        items.push({ id: 'resetKeys', label: () => t('resetControls'), ok: () => { s.keys = JSON.parse(JSON.stringify(DEFAULT_KEYS)); g.saveSettings(); } });
+        items.push({ id: 'back', label: () => t('back'), ok: () => g.back() });
+        return items;
+      }
+      case 'online':
+        return [
+          { id: 'create', label: () => t('createRoom'), ok: () => g.requireServer() && g.openSetup('online') },
+          { id: 'join', label: () => t('joinRoom'), ok: () => { if (g.requireServer()) { g.joinCode = ''; g.joinCursor = 0; g.go('join'); } } },
+          { id: 'back', label: () => t('back'), ok: () => g.back() },
+        ];
+      case 'lobby':
+        return [{ id: 'cancel', label: () => t('cancel'), ok: () => g.cancelLobby() }];
+      case 'pause':
+        if (g.session && g.session.online) {
+          return [
+            { id: 'resume', label: () => t('resume'), ok: () => g.resume() },
+            { id: 'settings', label: () => t('settings'), ok: () => g.go('settings') },
+            { id: 'leave', label: () => t('leaveMatch'), ok: () => g.quitToMenu() },
+          ];
+        }
+        return [
+          { id: 'resume', label: () => t('resume'), ok: () => g.resume() },
+          { id: 'restart', label: () => t('restart'), ok: () => g.startMatch() },
+          { id: 'settings', label: () => t('settings'), ok: () => g.go('settings') },
+          { id: 'menu', label: () => t('mainMenu'), ok: () => g.quitToMenu() },
+        ];
+      case 'results':
+        if (g.session && g.session.online) {
+          return [
+            { id: 'rematch', label: () => (g.net && g.net.votes[g.net.slot] ? t('waitRematch', g.net.votes.filter(Boolean).length) : t('rematch')), ok: () => g.voteRematch() },
+            { id: 'leave', label: () => t('leaveMatch'), ok: () => g.quitToMenu() },
+          ];
+        }
+        return [
+          { id: 'rematch', label: () => t('rematch'), ok: () => g.startMatch() },
+          { id: 'stage', label: () => t('changeStage'), ok: () => { g.endSession(); g.stack = ['main', 'setup', 'stage']; g.enterScreen(); } },
+          { id: 'menu', label: () => t('mainMenu'), ok: () => g.quitToMenu() },
+        ];
+      default:
+        return null;
+    }
+  };
+
+  P.openSetup = function (mode) {
+    this.settings.setup.mode = mode;
+    this.cursor.setup = undefined;
+    this.go('setup');
+  };
+
+  // ---------------------------------------------------------------- match sessions
+  P.matchOptions = function () {
+    const su = this.settings.setup;
+    const practice = su.mode === 'practice';
+    return {
+      stageId: SG.STAGES[this.stageIndex].id,
+      mode: su.mode,
+      winScore: practice ? 0 : su.winScore,
+      bestOf: practice ? 1 : su.bestOf,
+      timeLimit: practice ? 0 : su.timer,
+      cpuLevel: su.mode === 'cpu' ? su.cpuLevel : practice && su.practiceOpp !== 'human' ? su.practiceOpp : null,
+    };
+  };
+
+  P.startMatch = function (seed) {
+    const opts = this.matchOptions();
+    this.saveSettings();
+    this.matchCounter++;
+    const aiSeed = seed !== undefined ? seed : (this.hooks.seed ? this.hooks.seed() : this.matchCounter * 7919);
+    const world = SG.createWorld(opts);
+    const ai = opts.cpuLevel === null || opts.cpuLevel === undefined ? null : SG.createAI(opts.cpuLevel, aiSeed);
+    this.session = { opts, world, ai, resultsShown: false, musicStopped: false, aiInput: SG.NO_INPUT };
+    this.releaseAll();
+    this.stack = ['play'];
+    this.focusPaused = false;
+    this.enterScreen();
+    this.hooks.onMatchStart(this.session);
+    this.hooks.sfx('count', { n: 3 });
+  };
+
+  P.endSession = function () {
+    this.session = null;
+  };
+
+  P.quitToMenu = function () {
+    const wasOnline = !!(this.net || (this.session && this.session.online));
+    this.netClose();
+    this.endSession();
+    this.releaseAll();
+    if (wasOnline) {
+      this.stack = ['main', 'online'];
+      this.enterScreen();
+    } else this.reset('main');
+  };
+
+  P.pause = function (focusLost) {
+    if (this.top() !== 'play' || !this.session) return;
+    if (this.session.world.phase === 'matchEnd') return;
+    if (this.session.online) {
+      // Online: the server pauses the match for both players; the overlay opens when it confirms.
+      if (this.net) this.net.conn.send({ t: 'pause' });
+      this.focusPaused = !!focusLost;
+      return;
+    }
+    this.focusPaused = !!focusLost;
+    this.hooks.sfx('pause');
+    this.go('pause');
+  };
+
+  P.resume = function () {
+    if (this.top() !== 'pause') return;
+    if (this.session && this.session.online) {
+      if (this.net) this.net.conn.send({ t: 'resume' });
+      return;
+    }
+    this.focusPaused = false;
+    this.back();
+    this.hooks.sfx('resume');
+  };
+
+  // Which input sources control player i: keyboard set, gamepad slot, touch cluster.
+  // In single-player and online modes the one local player may use either set.
+  P.humanInput = function (i) {
+    const s = this.session;
+    const solo = !!(s && (s.ai || s.online));
+    const srcs = solo && i === 0 ? [0, 1] : [i];
+    const k = this.keys;
+    const pr = this.pressed;
+    const inp = { left: false, right: false, jumpHeld: false, jumpPressed: false };
+    for (const src of srcs) {
+      const b = this.settings.keys[src === 0 ? 'p1' : 'p2'];
+      const pad = 'Pad' + src;
+      const touch = 'Touch' + src;
+      const L = [b.left, pad + 'Left', touch + 'Left'];
+      const R = [b.right, pad + 'Right', touch + 'Right'];
+      const J = [b.jump, pad + 'A', pad + 'B', touch + 'Jump'];
+      inp.left = inp.left || L.some((c) => k[c]);
+      inp.right = inp.right || R.some((c) => k[c]);
+      inp.jumpHeld = inp.jumpHeld || J.some((c) => k[c]);
+      inp.jumpPressed = inp.jumpPressed || J.some((c) => pr[c]);
+    }
+    return inp;
+  };
+
+  // Inputs for one local (offline) tick.
+  P.localInputs = function (withInput) {
+    const s = this.session;
+    const w = s.world;
+    if (withInput) {
+      const i0 = this.humanInput(0);
+      const i1 = s.ai ? s.ai.think(w, 1) : this.humanInput(1);
+      s.aiInput = s.ai ? i1 : SG.NO_INPUT;
+      return [i0, i1];
+    }
+    if (s.ai) s.ai.think(w, 1);
+    return null;
+  };
+
+  P.stepMatch = function (inputs) {
+    const s = this.session;
+    const w = s.world;
+    for (const p of w.players) { p.px = p.x; p.py = p.y; }
+    for (const pl of w.stage.platforms) { pl.px = pl.x; pl.py = pl.y; }
+    SG.stepWorld(w, inputs);
+    for (const ev of w.events) this.onWorldEvent(ev);
+    this.hooks.onWorldEvents(w.events, s);
+    this.hooks.onTick(s);
+    if (w.phase === 'matchEnd' && !s.resultsShown && w.phaseTimer >= 20) {
+      s.resultsShown = true;
+      this.go('results');
+    }
+  };
+
+  P.onWorldEvent = function (ev) {
+    const s = this.session;
+    const sfx = this.hooks.sfx;
+    switch (ev.type) {
+      case 'count': sfx('count', { n: ev.n }); break;
+      case 'go': sfx('go'); break;
+      case 'roundStart': sfx('count', { n: 3 }); break;
+      case 'jump': sfx('jump', { who: ev.who }); break;
+      case 'land': if (ev.speed > 2) sfx('land', { who: ev.who, speed: ev.speed }); break;
+      case 'bump': sfx('bump'); break;
+      case 'stomp': sfx('stomp', { who: ev.top }); sfx('respawn'); break;
+      case 'score': {
+        const w = s.world;
+        const ws = w.opts.winScore;
+        const matchPoint = ws > 1 && ev.score === ws - 1 && !w.suddenDeath;
+        sfx(matchPoint ? 'matchPoint' : 'score', { who: ev.who });
+        break;
+      }
+      case 'suddenDeath': sfx('suddenDeath'); break;
+      case 'roundEnd':
+        if (ev.matchOver) {
+          s.musicStopped = true;
+          this.updateMusic();
+          sfx('victory');
+        } else sfx('roundWin');
+        break;
+      default: break;
+    }
+  };
+
+  // ---------------------------------------------------------------- fixed tick (60 Hz)
+  P.tick = function () {
+    this.uiTicks++;
+    this.screenTicks++;
+    if (this.toast && --this.toast.ticks <= 0) this.toast = null;
+    const top = this.top();
+    if (this.net && this.uiTicks % SG.NET.PING_EVERY === 0) this.net.conn.send({ t: 'ping', c: this.hooks.now() });
+    if (this.session && this.session.online) this.tickOnline();
+    else if (this.session && (top === 'play' || top === 'results')) this.stepMatch(this.localInputs(top === 'play'));
+    this.clearPressed();
+  };
+
+  // ---------------------------------------------------------------- online (see js/net.js)
+  P.requireServer = function () {
+    if (this.hooks.netConnect) return true;
+    this.toast = { text: SG.t('noServer'), ticks: 150 };
+    this.hooks.sfx('back');
+    return false;
+  };
+
+  P.onlineOpts = function () {
+    const o = this.matchOptions();
+    return SG.sanitizeOnlineOpts({ stageId: o.stageId, winScore: o.winScore, bestOf: o.bestOf, timeLimit: o.timeLimit });
+  };
+
+  // intent: 'create' | 'join'
+  P.netOpen = function (intent, code) {
+    this.netClose();
+    const n = {
+      intent, phase: 'connecting', code: code || '', urls: [], slot: -1, rtt: -1,
+      votes: [false, false], pausedBy: -1, press: 0, sentPress: 0, lastBits: -1, conn: null, closing: false,
+    };
+    this.net = n;
+    const conn = this.hooks.netConnect
+      ? this.hooks.netConnect((msg) => { if (this.net === n) this.onNet(msg); }, () => { if (this.net === n) this.onNetClosed(); })
+      : null;
+    if (!conn) {
+      this.net = null;
+      this.requireServer();
+      return false;
+    }
+    n.conn = conn;
+    if (intent === 'create') conn.send({ t: 'create', v: SG.NET.PROTOCOL, opts: this.onlineOpts() });
+    else conn.send({ t: 'join', v: SG.NET.PROTOCOL, code });
+    this.go('lobby');
+    return true;
+  };
+
+  P.onlineCreate = function () { return this.netOpen('create'); };
+  P.onlineJoin = function (code) {
+    if (!SG.validRoomCode(code)) return false;
+    return this.netOpen('join', code);
+  };
+  // Opened from a shared link (…/?room=1234).
+  P.autoJoin = function (code) {
+    if (!SG.validRoomCode(code) || !this.hooks.netConnect) return false;
+    this.stack = ['main', 'online', 'join'];
+    this.joinCode = code;
+    this.enterScreen();
+    return this.onlineJoin(code);
+  };
+
+  P.netClose = function () {
+    const n = this.net;
+    if (!n) return;
+    this.net = null;
+    n.closing = true;
+    try {
+      n.conn.send({ t: 'leave' });
+      n.conn.close();
+    } catch (e) {
+      /* already closed */
+    }
+  };
+
+  P.cancelLobby = function () {
+    this.netClose();
+    if (this.top() === 'lobby') this.back();
+  };
+
+  // Connection or room ended unexpectedly: back to the Online menu with a message.
+  P.endOnline = function (textKey) {
+    this.netClose();
+    this.endSession();
+    this.releaseAll();
+    this.stack = ['main', 'online'];
+    this.enterScreen();
+    this.toast = { text: SG.t(textKey), ticks: 180 };
+    this.hooks.sfx('back');
+  };
+
+  P.onNetClosed = function () {
+    if (this.net && !this.net.closing) this.endOnline(this.net.phase === 'connecting' ? 'noServer' : 'connLost');
+  };
+
+  P.onNet = function (msg) {
+    const n = this.net;
+    const s = this.session;
+    const on = s && s.online;
+    switch (msg.t) {
+      case 'created':
+        n.phase = 'lobby';
+        n.code = msg.code;
+        n.urls = this.hooks.shareUrls(msg.code, msg.ips || [], msg.port) || [];
+        break;
+      case 'error': {
+        const key = { notFound: 'roomNotFound', full: 'roomFull', version: 'badVersion', busy: 'serverBusy' }[msg.reason] || 'connLost';
+        this.netClose();
+        if (this.top() === 'lobby') this.back();
+        if (this.top() === 'join') this.joinCode = '';
+        this.toast = { text: SG.t(key), ticks: 180 };
+        this.hooks.sfx('back');
+        break;
+      }
+      case 'start':
+        this.startOnlineMatch(msg);
+        break;
+      case 'f':
+        if (!on || !Array.isArray(msg.a)) break;
+        for (let k = 0; k < msg.a.length; k++) on.queue.push({ n: msg.n + k, a: msg.a[k] });
+        if (msg.h) for (const [hn, hv] of msg.h) on.hashes.set(hn, hv);
+        break;
+      case 'paused':
+        n.pausedBy = msg.by;
+        if (s && this.top() === 'play') {
+          this.releaseAll();
+          this.hooks.sfx('pause');
+          this.go('pause');
+        }
+        break;
+      case 'resumed':
+        n.pausedBy = -1;
+        this.focusPaused = false;
+        if (s && this.stack.includes('pause')) {
+          this.stack = ['play'];
+          this.enterScreen();
+          this.hooks.sfx('resume');
+        }
+        break;
+      case 'votes':
+        n.votes = msg.votes;
+        break;
+      case 'state':
+        if (on) this.applyServerState(msg);
+        break;
+      case 'pong':
+        if (typeof msg.c === 'number') n.rtt = Math.max(0, this.hooks.now() - msg.c);
+        break;
+      case 'left':
+        this.endOnline('oppLeft');
+        break;
+      default:
+        break;
+    }
+  };
+
+  P.startOnlineMatch = function (msg) {
+    const n = this.net;
+    const opts = SG.sanitizeOnlineOpts(msg.opts);
+    const world = SG.createWorld(opts);
+    this.session = {
+      opts, world, ai: null, resultsShown: false, musicStopped: false, aiInput: SG.NO_INPUT,
+      online: { slot: msg.you, queue: [], history: [], hashes: new Map(), started: false, n: 0, stalls: 0, desyncs: 0, resyncs: 0 },
+    };
+    n.phase = 'match';
+    n.slot = msg.you;
+    n.code = msg.code || n.code;
+    n.votes = [false, false];
+    n.pausedBy = -1;
+    this.releaseAll();
+    this.stack = ['play'];
+    this.focusPaused = false;
+    this.enterScreen();
+    this.hooks.onMatchStart(this.session);
+    this.hooks.sfx('count', { n: 3 });
+  };
+
+  P.voteRematch = function () {
+    if (!this.net) return;
+    this.net.votes[this.net.slot] = true;
+    this.net.conn.send({ t: 'rematch' });
+  };
+
+  P.tickOnline = function () {
+    const s = this.session;
+    const on = s.online;
+    const n = this.net;
+    if (!n) return;
+    // 1) send this device's input (nothing is held while a menu is open over the match)
+    const inp = this.top() === 'play' ? this.humanInput(0) : SG.NO_INPUT;
+    if (inp.jumpPressed) n.press++;
+    const bits = SG.packHeld(inp);
+    if (bits !== n.lastBits || n.press !== n.sentPress) {
+      n.conn.send({ t: 'in', b: bits, p: n.press });
+      n.lastBits = bits;
+      n.sentPress = n.press;
+    }
+    // 2) play the server's frames, keeping a small buffer against network jitter
+    const NET = SG.NET;
+    const q = on.queue;
+    if (!on.started && q.length >= NET.START_BUFFER) on.started = true;
+    let k = 0;
+    if (on.started) {
+      if (q.length > NET.FAST_FORWARD) k = q.length - NET.START_BUFFER;
+      else if (q.length > NET.CATCH_UP) k = 2;
+      else k = Math.min(1, q.length);
+      if (q.length === 0 && s.world.phase !== 'matchEnd') {
+        on.started = false; // ran dry: rebuild the buffer
+        if (n.pausedBy < 0) on.stalls++;
+      }
+    }
+    for (let j = 0; j < k && this.session === s; j++) this.applyFrame(q.shift());
+    if (k === 0 && this.session === s) {
+      const w = s.world;
+      for (const p of w.players) { p.px = p.x; p.py = p.y; }
+      for (const pl of w.stage.platforms) { pl.px = pl.x; pl.py = pl.y; }
+      if (w.phase === 'matchEnd') this.hooks.onTick(s); // keep the celebration animating
+    }
+  };
+
+  P.applyFrame = function (f) {
+    const s = this.session;
+    const on = s.online;
+    if (f.n <= on.n) return;
+    on.n = f.n;
+    this.stepMatch([SG.unpackInput(f.a[0]), SG.unpackInput(f.a[1])]);
+    on.history.push(f);
+    if (on.history.length > 600) on.history.splice(0, on.history.length - 600);
+    const h = on.hashes.get(f.n);
+    if (h !== undefined) {
+      on.hashes.delete(f.n);
+      if (SG.hashWorld(s.world) !== h) {
+        on.desyncs++;
+        if (this.net) this.net.conn.send({ t: 'resync' });
+      }
+    }
+  };
+
+  // Replace the local world by the server's copy, then replay frames already played after it.
+  P.applyServerState = function (msg) {
+    const s = this.session;
+    const on = s.online;
+    const w = msg.w;
+    if (!w || !w.players || !w.stage) return;
+    w.events = [];
+    if (msg.n >= on.n) {
+      // we were behind: skip straight to the server's tick
+      on.n = msg.n;
+      on.queue = on.queue.filter((f) => f.n > msg.n);
+    } else {
+      for (const f of on.history) {
+        if (f.n > msg.n) SG.stepWorld(w, [SG.unpackInput(f.a[0]), SG.unpackInput(f.a[1])]);
+      }
+    }
+    w.events = [];
+    for (const p of w.players) { p.px = p.x; p.py = p.y; }
+    for (const pl of w.stage.platforms) { pl.px = pl.x; pl.py = pl.y; }
+    s.world = w;
+    on.resyncs++;
+  };
+
+  // ---------------------------------------------------------------- input
+  P.keyDown = function (code, repeat) {
+    if (code === 'F1') {
+      if (!repeat) this.debug = !this.debug;
+      return;
+    }
+    if (this.capture) {
+      if (repeat) return;
+      if (isVirtual(code)) {
+        // controllers and touch buttons are fixed; B cancels the rebind
+        if (/^Pad[01]B$/.test(code)) { this.hooks.sfx('back'); this.capture = null; }
+        return;
+      }
+      if (code === 'Escape') this.hooks.sfx('back');
+      else if (!RESERVED_KEYS.includes(code)) {
+        this.bindKey(this.capture.player, this.capture.action, code);
+        this.hooks.sfx('select');
+      }
+      this.capture = null;
+      return;
+    }
+    const top = this.top();
+    if (top === 'play') {
+      if (isPauseKey(code)) {
+        if (!repeat) this.pause(false);
+        return;
+      }
+      if (!this.keys[code] && !repeat) this.pressed[code] = true;
+      this.keys[code] = true;
+      return;
+    }
+    this.keys[code] = true;
+    if (top === 'join' && this.joinScreenKey(code, repeat)) return;
+    this.menuKey(code, repeat);
+  };
+
+  P.keyUp = function (code) {
+    this.keys[code] = false;
+  };
+
+  P.blur = function () {
+    this.releaseAll();
+    if (this.top() === 'play' && this.session && this.session.world.phase !== 'matchEnd') this.pause(true);
+  };
+
+  // Join Room screen: digits type the code; arrows / D-pad move over the on-screen keypad.
+  P.joinScreenKey = function (code, repeat) {
+    const m = DIGIT_RE.exec(code);
+    if (m) { this.joinKey(m[1]); return true; }
+    if (code === 'Backspace') { if (!repeat) this.joinKey('del'); return true; }
+    if ((code === 'Enter' || code === 'NumpadEnter') && this.joinCode.length === SG.NET.CODE_LEN) {
+      if (!repeat) this.joinKey('ok');
+      return true;
+    }
+    const nav = navOf(code);
+    if (!nav) return true;
+    const c = this.joinCursor;
+    if (nav === 'left') this.joinCursor = c % 3 === 0 ? c + 2 : c - 1;
+    else if (nav === 'right') this.joinCursor = c % 3 === 2 ? c - 2 : c + 1;
+    else if (nav === 'up') this.joinCursor = (c + 9) % 12;
+    else if (nav === 'down') this.joinCursor = (c + 3) % 12;
+    else if (nav === 'ok') { if (!repeat) this.joinKey(SG.JOIN_KEYS[c]); return true; }
+    else if (nav === 'back') { if (!repeat) { this.hooks.sfx('back'); this.back(); } return true; }
+    this.hooks.sfx('menuMove');
+    return true;
+  };
+
+  P.joinKey = function (key) {
+    if (this.top() !== 'join') return;
+    const i = SG.JOIN_KEYS.indexOf(key);
+    if (i >= 0) this.joinCursor = i;
+    if (/^[0-9]$/.test(key)) {
+      if (this.joinCode.length < SG.NET.CODE_LEN) { this.joinCode += key; this.hooks.sfx('menuMove'); }
+    } else if (key === 'del') {
+      if (this.joinCode.length) { this.joinCode = this.joinCode.slice(0, -1); this.hooks.sfx('back'); }
+    } else if (key === 'ok') {
+      if (this.joinCode.length === SG.NET.CODE_LEN) { this.hooks.sfx('select'); this.onlineJoin(this.joinCode); }
+      else this.hooks.sfx('back');
+    }
+  };
+
+  P.menuKey = function (code, repeat) {
+    const g = this;
+    const top = g.top();
+    const nav = navOf(code);
+    if (!nav) return;
+    if (top === 'lobby' && nav === 'back') {
+      if (!repeat) { g.hooks.sfx('back'); g.cancelLobby(); }
+      return;
+    }
+    // Results appear while players may still be mashing keys: ignore input for half a second.
+    if (top === 'results' && g.screenTicks < OVERLAY_LOCK_TICKS) return;
+    if (top === 'title') {
+      if (nav === 'ok' && !repeat) { g.hooks.sfx('start'); g.go('main', true); }
+      return;
+    }
+    if (top === 'howto') {
+      const n = SG.t('howPages').length;
+      if (nav === 'left' || nav === 'up') { if (g.howPage > 0) { g.howPage--; g.hooks.sfx('menuMove'); } }
+      else if (nav === 'right' || nav === 'down' || nav === 'ok') {
+        if (g.howPage < n - 1) { g.howPage++; g.hooks.sfx('menuMove'); }
+        else if (nav === 'ok') { g.hooks.sfx('back'); g.back(); }
+      } else if (nav === 'back') { g.hooks.sfx('back'); g.back(); }
+      return;
+    }
+    if (top === 'credits') {
+      if ((nav === 'back' || nav === 'ok') && !repeat) { g.hooks.sfx('back'); g.back(); }
+      return;
+    }
+    if (top === 'stage') {
+      const n = SG.STAGES.length;
+      if (nav === 'left' || nav === 'up') { g.stageIndex = (g.stageIndex - 1 + n) % n; g.hooks.sfx('menuMove'); g.saveSettings(); }
+      else if (nav === 'right' || nav === 'down') { g.stageIndex = (g.stageIndex + 1) % n; g.hooks.sfx('menuMove'); g.saveSettings(); }
+      else if (nav === 'ok' && !repeat) {
+        g.hooks.sfx('select');
+        if (g.settings.setup.mode === 'online') g.onlineCreate();
+        else g.startMatch();
+      }
+      else if (nav === 'back' && !repeat) { g.hooks.sfx('back'); g.back(); }
+      return;
+    }
+    const items = g.menuItems();
+    if (!items) return;
+    let i = g.cursor[top] || 0;
+    if (nav === 'up' || nav === 'down') {
+      i = (i + (nav === 'up' ? -1 : 1) + items.length) % items.length;
+      g.cursor[top] = i;
+      g.hooks.sfx('menuMove');
+    } else if (nav === 'left' || nav === 'right') {
+      const it = items[i];
+      if (it.adjust) { it.adjust(nav === 'left' ? -1 : 1); if (it.id !== 'sfxVol') g.hooks.sfx('menuMove'); }
+    } else if (nav === 'ok') {
+      if (repeat) return;
+      const it = items[i];
+      if (it.ok) { g.hooks.sfx(it.id === 'back' ? 'back' : 'select'); it.ok(); }
+    } else if (nav === 'back') {
+      if (repeat) return;
+      g.hooks.sfx('back');
+      if (top === 'pause') g.resume();
+      else if (top === 'results') g.quitToMenu();
+      else if (top === 'main') g.reset('title');
+      else g.back();
+    }
+  };
+
+  // Pointer support: select/activate a menu row by index.
+  P.pointerSelect = function (index, activate) {
+    const items = this.menuItems();
+    if (!items || index < 0 || index >= items.length) return;
+    if (this.cursor[this.top()] !== index) { this.cursor[this.top()] = index; if (!activate) this.hooks.sfx('menuMove'); }
+    if (activate) this.menuKey('Enter', false);
+  };
+  // Pointer/touch: change a row's value (the ‹ › arrows).
+  P.pointerAdjust = function (index, dir) {
+    const items = this.menuItems();
+    if (!items || index < 0 || index >= items.length || !items[index].adjust) return;
+    this.cursor[this.top()] = index;
+    this.menuKey(dir < 0 ? 'ArrowLeft' : 'ArrowRight', false);
+  };
+
+  // ---------------------------------------------------------------- touch controls (view coordinates)
+  // Two clusters when two people share one touch screen, otherwise one big layout for one player.
+  P.touchButtons = function () {
+    const s = this.session;
+    const shared = !!(s && !s.ai && !s.online);
+    const VW = C.VIEW_W;
+    const VH = C.VIEW_H;
+    const b = [];
+    if (shared) {
+      const y = VH - 34;
+      b.push({ code: 'Touch0Left', x: 46, y, r: 27, icon: 'left', who: 0 });
+      b.push({ code: 'Touch0Right', x: 112, y, r: 27, icon: 'right', who: 0 });
+      b.push({ code: 'Touch0Jump', x: 190, y, r: 30, icon: 'jump', who: 0 });
+      b.push({ code: 'Touch1Jump', x: VW - 190, y, r: 30, icon: 'jump', who: 1 });
+      b.push({ code: 'Touch1Left', x: VW - 112, y, r: 27, icon: 'left', who: 1 });
+      b.push({ code: 'Touch1Right', x: VW - 46, y, r: 27, icon: 'right', who: 1 });
+    } else {
+      b.push({ code: 'Touch0Left', x: 56, y: VH - 42, r: 36, icon: 'left', who: 0 });
+      b.push({ code: 'Touch0Right', x: 146, y: VH - 42, r: 36, icon: 'right', who: 0 });
+      b.push({ code: 'Touch0Jump', x: VW - 72, y: VH - 46, r: 42, icon: 'jump', who: 0 });
+    }
+    b.push({ code: 'TouchPause', x: VW / 2, y: VH - 22, r: 17, icon: 'pause', who: -1 });
+    return b;
+  };
+  // The button a finger at (x, y) is on (generous radius, nearest wins), or null.
+  SG.touchHit = function (buttons, x, y) {
+    let best = null;
+    let bestD = Infinity;
+    for (const b of buttons) {
+      const d = Math.hypot(x - b.x, y - b.y);
+      if (d <= b.r * 1.35 && d < bestD) { best = b; bestD = d; }
+    }
+    return best;
+  };
+
+  // ---------------------------------------------------------------- key names
+  const NAMES = {
+    ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', Space: 'Space', Enter: 'Enter',
+    ShiftLeft: 'L-Shift', ShiftRight: 'R-Shift', ControlLeft: 'L-Ctrl', ControlRight: 'R-Ctrl',
+    AltLeft: 'L-Alt', AltRight: 'R-Alt', Backspace: 'Backspace', Tab: 'Tab', Slash: '/', Period: '.',
+    Comma: ',', Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Minus: '-', Equal: '=',
+    Backslash: '\\', Backquote: '`',
+  };
+  SG.keyName = function (code) {
+    if (!code) return '—';
+    if (NAMES[code]) return NAMES[code];
+    if (code.startsWith('Key')) return code.slice(3);
+    if (code.startsWith('Digit')) return code.slice(5);
+    if (code.startsWith('Numpad')) return 'Num ' + code.slice(6);
+    return code;
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/audio.js
+// audio.js — fully synthesized audio (Web Audio). No audio files → nothing can go missing.
+// SFX are short oscillator/noise envelopes; music is a small look-ahead step sequencer.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+
+  let ctx = null;
+  let master, musicBus, sfxBus, musicDuck, noiseBuf;
+  let vol = { music: 0.6, sfx: 0.8, mute: false };
+  let ducked = false;
+  let wantTrack = null;
+  let track = null;
+  let step = 0;
+  let nextTime = 0;
+  let timer = null;
+  const lastPlayed = Object.create(null);
+  let voices = 0;
+  const MAX_VOICES = 24;
+
+  const midi = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  const NOTE = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
+  const nm = (s) => {
+    const m = /^([A-G]#?)(\d)$/.exec(s);
+    return m ? 12 * (+m[2] + 1) + NOTE[m[1]] : null;
+  };
+
+  function ensure() {
+    if (ctx) {
+      if (ctx.state === 'suspended') ctx.resume();
+      return true;
+    }
+    const AC = root.AudioContext || root.webkitAudioContext;
+    if (!AC) return false;
+    try {
+      ctx = new AC();
+    } catch (e) {
+      return false;
+    }
+    master = ctx.createGain();
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -10;
+    comp.ratio.value = 4;
+    master.connect(comp).connect(ctx.destination);
+    musicBus = ctx.createGain();
+    musicDuck = ctx.createGain();
+    sfxBus = ctx.createGain();
+    musicBus.connect(musicDuck).connect(master);
+    sfxBus.connect(master);
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    const rng = SG.makeRng(99);
+    for (let i = 0; i < d.length; i++) d[i] = rng() * 2 - 1;
+    applyVolumes();
+    if (wantTrack) startTrack(wantTrack);
+    return true;
+  }
+
+  function applyVolumes() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const m = vol.mute ? 0 : 1;
+    master.gain.setTargetAtTime(m, now, 0.02);
+    musicBus.gain.setTargetAtTime(vol.music * 0.55, now, 0.05);
+    sfxBus.gain.setTargetAtTime(vol.sfx * 0.9, now, 0.02);
+    musicDuck.gain.setTargetAtTime(ducked ? 0.3 : 1, now, 0.1);
+  }
+
+  function voice(end) {
+    voices++;
+    setTimeout(() => { voices--; }, Math.max(10, (end - ctx.currentTime) * 1000 + 50));
+  }
+
+  function panNode(dest, pan) {
+    if (!pan || !ctx.createStereoPanner) return dest;
+    const p = ctx.createStereoPanner();
+    p.pan.value = pan;
+    p.connect(dest);
+    return p;
+  }
+
+  // Tone with pitch sweep and ADSR-ish envelope.
+  function tone(o) {
+    const t0 = (o.at || ctx.currentTime) + (o.delay || 0);
+    const dur = o.dur || 0.1;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = o.type || 'square';
+    osc.frequency.setValueAtTime(o.f0, t0);
+    if (o.f1) osc.frequency.exponentialRampToValueAtTime(Math.max(20, o.f1), t0 + dur);
+    const v = o.vol === undefined ? 0.2 : o.vol;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(v, t0 + (o.attack || 0.005));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g).connect(panNode(o.dest || sfxBus, o.pan));
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+    voice(t0 + dur);
+  }
+
+  function noise(o) {
+    const t0 = (o.at || ctx.currentTime) + (o.delay || 0);
+    const dur = o.dur || 0.1;
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter();
+    f.type = o.filter || 'lowpass';
+    f.frequency.setValueAtTime(o.freq || 1200, t0);
+    if (o.freq1) f.frequency.exponentialRampToValueAtTime(o.freq1, t0 + dur);
+    f.Q.value = o.q || 0.7;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(o.vol === undefined ? 0.2 : o.vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f).connect(g).connect(panNode(o.dest || sfxBus, o.pan));
+    src.start(t0, Math.random() * 0.5);
+    src.stop(t0 + dur + 0.02);
+    voice(t0 + dur);
+  }
+
+  const panFor = (who) => (who === 0 ? -0.35 : who === 1 ? 0.35 : 0);
+
+  // name → [minimum interval in ms (per player), play function]
+  const SFX = {
+    menuMove: [35, () => tone({ type: 'square', f0: 620, dur: 0.05, vol: 0.06 })],
+    select: [60, () => { tone({ type: 'square', f0: 660, dur: 0.06, vol: 0.08 }); tone({ type: 'square', f0: 990, dur: 0.09, vol: 0.08, delay: 0.05 }); }],
+    back: [60, () => { tone({ type: 'square', f0: 520, f1: 330, dur: 0.1, vol: 0.07 }); }],
+    start: [200, () => { [523, 659, 784, 1047].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.12, vol: 0.08, delay: i * 0.06 })); }],
+    pause: [100, () => { tone({ type: 'triangle', f0: 880, dur: 0.08, vol: 0.15 }); tone({ type: 'triangle', f0: 660, dur: 0.12, vol: 0.15, delay: 0.07 }); }],
+    resume: [100, () => { tone({ type: 'triangle', f0: 660, dur: 0.08, vol: 0.15 }); tone({ type: 'triangle', f0: 880, dur: 0.12, vol: 0.15, delay: 0.07 }); }],
+    count: [300, () => { tone({ type: 'square', f0: 440, dur: 0.16, vol: 0.12 }); tone({ type: 'sine', f0: 880, dur: 0.16, vol: 0.06 }); }],
+    go: [300, () => { tone({ type: 'square', f0: 880, dur: 0.35, vol: 0.12 }); tone({ type: 'square', f0: 1320, dur: 0.35, vol: 0.06 }); noise({ dur: 0.25, vol: 0.08, filter: 'highpass', freq: 3000 }); }],
+    jump: [40, (o) => tone({ type: 'square', f0: 280, f1: 560, dur: 0.11, vol: 0.07, pan: panFor(o.who) })],
+    land: [70, (o) => noise({ dur: 0.07 + Math.min(o.speed || 0, 14) * 0.004, vol: 0.05 + Math.min(o.speed || 0, 14) * 0.008, freq: 900, freq1: 200, pan: panFor(o.who) })],
+    bump: [140, () => { tone({ type: 'triangle', f0: 160, f1: 90, dur: 0.08, vol: 0.18 }); }],
+    stomp: [60, (o) => {
+      const p = panFor(o.who);
+      noise({ dur: 0.18, vol: 0.3, freq: 2500, freq1: 300, pan: p });
+      tone({ type: 'square', f0: 220, f1: 70, dur: 0.22, vol: 0.2, pan: p });
+      tone({ type: 'sine', f0: 1200, f1: 1800, dur: 0.12, vol: 0.12, delay: 0.03, pan: p });
+    }],
+    score: [100, (o) => { const p = panFor(o.who); tone({ type: 'square', f0: 988, dur: 0.07, vol: 0.09, delay: 0.08, pan: p }); tone({ type: 'square', f0: 1319, dur: 0.22, vol: 0.09, delay: 0.15, pan: p }); }],
+    matchPoint: [100, (o) => { const p = panFor(o.who); [988, 1319, 1568].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.12, vol: 0.09, delay: 0.08 + i * 0.07, pan: p })); }],
+    respawn: [100, () => { [523, 659, 784].forEach((f, i) => tone({ type: 'sine', f0: f, dur: 0.1, vol: 0.06, delay: i * 0.04 })); }],
+    suddenDeath: [500, () => { for (let i = 0; i < 3; i++) tone({ type: 'sawtooth', f0: 330, f1: 660, dur: 0.18, vol: 0.08, delay: i * 0.22 }); }],
+    roundWin: [300, () => { [659, 784, 988, 1319].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.14, vol: 0.09, delay: i * 0.09 })); }],
+    victory: [800, () => {
+      const seq = [['C5', 0, 0.12], ['E5', 0.12, 0.12], ['G5', 0.24, 0.12], ['C6', 0.36, 0.3], ['A5', 0.72, 0.12], ['B5', 0.84, 0.12], ['C6', 0.96, 0.7]];
+      for (const [n, t, d] of seq) {
+        tone({ type: 'square', f0: midi(nm(n)), dur: d + 0.05, vol: 0.09, delay: t });
+        tone({ type: 'triangle', f0: midi(nm(n) - 12), dur: d + 0.05, vol: 0.12, delay: t });
+      }
+      for (const n of ['C5', 'E5', 'G5']) tone({ type: 'sine', f0: midi(nm(n)), dur: 1.0, vol: 0.06, delay: 0.96 });
+      noise({ dur: 0.6, vol: 0.06, filter: 'highpass', freq: 5000, delay: 0.96 });
+    }],
+  };
+
+  // ---------------------------------------------------------------- music
+  // Patterns are written per 8th note: note name, '-' to hold, '.' for rest.
+  const seq8 = (str) => str.trim().split(/\s+/);
+  const TRACKS = {
+    menu: {
+      bpm: 100,
+      bars: 4,
+      chords: [['C4', 'E4', 'G4'], ['A3', 'C4', 'E4'], ['F3', 'A3', 'C4'], ['G3', 'B3', 'D4']],
+      bass: ['C3', 'A2', 'F2', 'G2'],
+      lead: seq8('E5 . G5 . A5 G5 E5 .  C5 . E5 . D5 C5 A4 .  A4 C5 F5 . E5 . C5 .  D5 . B4 . G4 - - .'),
+      leadType: 'triangle',
+      leadVol: 0.12,
+      drums: false,
+      hat: true,
+    },
+    battle: {
+      bpm: 148,
+      bars: 8,
+      chords: [['A3', 'C4', 'E4'], ['F3', 'A3', 'C4'], ['C4', 'E4', 'G4'], ['G3', 'B3', 'D4'], ['A3', 'C4', 'E4'], ['F3', 'A3', 'C4'], ['G3', 'B3', 'D4'], ['E3', 'G#3', 'B3']],
+      bass: ['A2', 'F2', 'C3', 'G2', 'A2', 'F2', 'G2', 'E2'],
+      lead: seq8(
+        'A4 . C5 E5 . D5 C5 .  A4 . F4 A4 . C5 A4 .  G4 . C5 E5 . G5 E5 .  D5 . B4 G4 . B4 D5 .' +
+        '  E5 . A5 . G5 E5 . C5  F5 . E5 C5 . A4 C5 .  D5 . G5 . F5 D5 B4 .  G#4 . B4 . E5 - D5 B4'
+      ),
+      leadType: 'square',
+      leadVol: 0.07,
+      drums: true,
+      hat: true,
+    },
+  };
+
+  function scheduleStep(tr, s, t) {
+    const spb = 60 / tr.bpm / 2; // seconds per 8th
+    const per = 8;
+    const bar = Math.floor(s / per) % tr.bars;
+    const i = s % per;
+    const dest = musicBus;
+    // bass: 8th-note pulse with octave jumps
+    const root = nm(tr.bass[bar]);
+    const bassNote = tr.drums ? (i % 4 === 2 ? root + 12 : root) : i % 4 === 0 ? root : null;
+    if (bassNote !== null) tone({ at: t, type: 'triangle', f0: midi(bassNote), dur: tr.drums ? spb * 0.9 : spb * 3.5, vol: tr.drums ? 0.22 : 0.2, dest });
+    // chord arpeggio (soft)
+    const ch = tr.chords[bar];
+    const arpNote = nm(ch[i % 3]) + (i >= 4 ? 12 : 0);
+    tone({ at: t, type: 'sine', f0: midi(arpNote), dur: spb * 0.9, vol: tr.drums ? 0.035 : 0.05, dest });
+    // lead
+    const li = (bar * per + i) % tr.lead.length;
+    const ln = tr.lead[li];
+    if (ln !== '.' && ln !== '-') {
+      let len = 1;
+      while (tr.lead[(li + len) % tr.lead.length] === '-' && len < 8) len++;
+      tone({ at: t, type: tr.leadType, f0: midi(nm(ln)), dur: spb * len * 0.92, vol: tr.leadVol, dest, attack: 0.01 });
+    }
+    // drums
+    if (tr.drums) {
+      if (i === 0 || i === 4 || (i === 5 && bar % 2 === 1)) tone({ at: t, type: 'sine', f0: 150, f1: 45, dur: 0.14, vol: 0.4, dest });
+      if (i === 2 || i === 6) noise({ at: t, dur: 0.12, vol: 0.12, filter: 'bandpass', freq: 1800, q: 0.8, dest });
+    }
+    if (tr.hat) noise({ at: t + (tr.drums ? 0 : spb * 0.5), dur: 0.03, vol: tr.drums ? 0.05 : 0.025, filter: 'highpass', freq: 7000, dest });
+  }
+
+  function pump() {
+    if (!ctx || !track) return;
+    const tr = TRACKS[track];
+    const spb = 60 / tr.bpm / 2;
+    if (nextTime < ctx.currentTime - 0.2) nextTime = ctx.currentTime + 0.05; // tab was in background
+    while (nextTime < ctx.currentTime + 0.25) {
+      scheduleStep(tr, step, nextTime);
+      step++;
+      nextTime += spb;
+    }
+  }
+
+  function startTrack(name) {
+    if (!ctx) return;
+    track = name;
+    step = 0;
+    nextTime = ctx.currentTime + 0.08;
+    if (!timer) timer = setInterval(pump, 50);
+    pump();
+  }
+
+  function stopTrack() {
+    track = null;
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+    if (ctx) {
+      // fade out whatever is already scheduled
+      const now = ctx.currentTime;
+      musicBus.gain.cancelScheduledValues(now);
+      musicBus.gain.setValueAtTime(musicBus.gain.value, now);
+      musicBus.gain.linearRampToValueAtTime(0, now + 0.15);
+      const old = musicBus;
+      setTimeout(() => {
+        // fresh bus so later tracks start clean
+        try { old.disconnect(); } catch (e) { /* already gone */ }
+      }, 300);
+      musicBus = ctx.createGain();
+      musicBus.connect(musicDuck);
+      musicBus.gain.value = vol.music * 0.55;
+    }
+  }
+
+  SG.Audio = {
+    unlock: ensure,
+    get ready() { return !!ctx && ctx.state === 'running'; },
+    apply(settings) {
+      vol = { music: settings.musicVol / 10, sfx: settings.sfxVol / 10, mute: settings.mute };
+      applyVolumes();
+    },
+    duck(on) {
+      ducked = !!on;
+      applyVolumes();
+    },
+    music(name) {
+      if (name === wantTrack && (track === name || !ctx)) return;
+      wantTrack = name;
+      if (!ctx) return;
+      if (track) stopTrack();
+      if (name) startTrack(name);
+    },
+    play(name, o) {
+      if (!ctx || ctx.state !== 'running' || vol.mute || vol.sfx <= 0) return;
+      const def = SFX[name];
+      if (!def) return;
+      const opt = o || {};
+      const key = name + (opt.who === undefined ? '' : opt.who);
+      const now = performance.now();
+      if (lastPlayed[key] && now - lastPlayed[key] < def[0]) return; // prevent stacking
+      if (voices > MAX_VOICES && name !== 'stomp' && name !== 'victory') return;
+      lastPlayed[key] = now;
+      def[1](opt);
+    },
+    suspend() {
+      if (ctx && ctx.state === 'running') ctx.suspend();
+    },
+    resume() {
+      if (ctx && ctx.state === 'suspended') ctx.resume();
+    },
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/fighter.js
+// fighter.js — character art/animation and particle effects. Presentation only:
+// nothing here reads input or writes simulation state, and visuals never change hitboxes
+// (characters are drawn anchored to the 30x40 hitbox's feet).
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+
+  const PAL = [
+    { body: '#ea3f3a', shade: '#b4232a', light: '#ff9a87', ink: '#3a0b10', crest: '#ffb43c', crestTip: '#fff1a8', belly: '#ffd2c6', name: 'Ember' },
+    { body: '#2f86ea', shade: '#1b56b0', light: '#9fd0ff', ink: '#0a1d3d', crest: '#7fe7ff', crestTip: '#e8fdff', belly: '#cfe7ff', name: 'Tide' },
+  ];
+  SG.PALETTE = PAL;
+
+  // ============================================================== particles
+  const MAX_PARTS = 420;
+  const FX = {
+    parts: [],
+    shake: 0,
+    flash: 0,
+    flashColor: '#fff',
+    ghosts: [],
+    rng: SG.makeRng(12345),
+    clear() {
+      this.parts.length = 0;
+      this.ghosts.length = 0;
+      this.shake = 0;
+      this.flash = 0;
+    },
+    add(p) {
+      if (this.parts.length >= MAX_PARTS) this.parts.shift();
+      this.parts.push(p);
+    },
+    r(a, b) { return a + (b - a) * this.rng(); },
+    dust(x, y, n, spread, color) {
+      for (let i = 0; i < n; i++) {
+        this.add({ k: 'dot', x: x + this.r(-spread, spread), y, vx: this.r(-1.6, 1.6), vy: this.r(-1.8, -0.3), g: 0.06, life: this.r(16, 28), max: 28, size: this.r(2, 4.5), color: color || 'rgba(255,255,255,0.8)' });
+      }
+    },
+    sideDust(x, y, dir) {
+      for (let i = 0; i < 4; i++) this.add({ k: 'dot', x, y, vx: -dir * this.r(0.5, 2), vy: this.r(-1, -0.2), g: 0.05, life: 18, max: 18, size: this.r(2, 3.5), color: 'rgba(255,255,255,0.7)' });
+    },
+    burst(x, y, color, n, speed) {
+      for (let i = 0; i < n; i++) {
+        const a = this.r(0, Math.PI * 2);
+        const s = this.r(speed * 0.4, speed);
+        this.add({ k: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 1, g: 0.12, life: this.r(18, 32), max: 32, size: this.r(2, 4), color });
+      }
+    },
+    stars(x, y, n) {
+      for (let i = 0; i < n; i++) {
+        const a = -Math.PI / 2 + this.r(-1.3, 1.3);
+        const s = this.r(2.5, 5);
+        this.add({ k: 'star', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, g: 0.15, life: this.r(28, 40), max: 40, size: this.r(5, 8), rot: this.r(0, 6), vr: this.r(-0.3, 0.3), color: '#ffe066' });
+      }
+    },
+    ring(x, y, color, size, life) {
+      this.add({ k: 'ring', x, y, vx: 0, vy: 0, g: 0, life: life || 20, max: life || 20, size: size || 40, color });
+    },
+    text(x, y, str, color, size) {
+      this.add({ k: 'text', x, y, vx: 0, vy: -0.9, g: 0.012, life: 60, max: 60, size: size || 22, color, str });
+    },
+    confetti(x0, x1, y, n) {
+      const cols = ['#ff5a5a', '#ffd23f', '#3fd5ff', '#7cff6b', '#ff7ae6', '#ffffff'];
+      for (let i = 0; i < n; i++) {
+        this.add({ k: 'conf', x: this.r(x0, x1), y: y + this.r(-60, 0), vx: this.r(-1.5, 1.5), vy: this.r(-1, 2), g: 0.05, drag: 0.98, life: this.r(120, 200), max: 200, size: this.r(4, 8), rot: this.r(0, 6), vr: this.r(-0.25, 0.25), color: cols[i % cols.length] });
+      }
+    },
+    trail(x, y, index) {
+      this.add({ k: 'trail', x, y, vx: 0, vy: 0, g: 0, life: 10, max: 10, size: 1, color: PAL[index].light, who: index });
+    },
+    ghost(x, y, index, facing) {
+      this.ghosts.push({ x, y, index, facing, t: 0 });
+    },
+    tick() {
+      for (let i = this.parts.length - 1; i >= 0; i--) {
+        const p = this.parts[i];
+        p.vy += p.g;
+        if (p.drag) { p.vx *= p.drag; p.vy *= p.drag; }
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.vr) p.rot += p.vr;
+        if (--p.life <= 0) this.parts.splice(i, 1);
+      }
+      for (let i = this.ghosts.length - 1; i >= 0; i--) if (++this.ghosts[i].t > 34) this.ghosts.splice(i, 1);
+      this.shake *= 0.86;
+      if (this.shake < 0.3) this.shake = 0;
+      this.flash *= 0.8;
+      if (this.flash < 0.02) this.flash = 0;
+    },
+    draw(ctx) {
+      for (const g of this.ghosts) drawGhost(ctx, g);
+      for (const p of this.parts) {
+        const a = Math.max(0, p.life / p.max);
+        ctx.globalAlpha = Math.min(1, a * 1.4);
+        ctx.fillStyle = p.color;
+        ctx.strokeStyle = p.color;
+        switch (p.k) {
+          case 'dot':
+          case 'spark':
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * (0.5 + a * 0.5), 0, Math.PI * 2);
+            ctx.fill();
+            break;
+          case 'star':
+            starPath(ctx, p.x, p.y, p.size, p.rot);
+            ctx.fill();
+            break;
+          case 'ring':
+            ctx.lineWidth = 3 * a + 0.5;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * (1 - a) + 6, 0, Math.PI * 2);
+            ctx.stroke();
+            break;
+          case 'text':
+            ctx.font = `900 ${p.size}px "Trebuchet MS", "Segoe UI", sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+            ctx.strokeText(p.str, p.x, p.y);
+            ctx.fillText(p.str, p.x, p.y);
+            break;
+          case 'conf':
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.rot);
+            ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+            ctx.restore();
+            break;
+          case 'trail':
+            ctx.globalAlpha = a * 0.35;
+            roundRect(ctx, p.x + 2, p.y + 2, 26, 36, 11);
+            ctx.fill();
+            break;
+          default:
+            break;
+        }
+      }
+      ctx.globalAlpha = 1;
+    },
+  };
+  SG.FX = FX;
+
+  function starPath(ctx, x, y, r, rot) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const rr = i % 2 === 0 ? r : r * 0.45;
+      const a = rot + (i * Math.PI) / 5;
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath();
+  }
+  SG.starPath = starPath;
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  SG.roundRect = roundRect;
+
+  // ============================================================== per-player animation state
+  SG.createVis = function (index) {
+    return { index, sy: 1, vsy: 0, walk: 0, lean: 0, happy: 0, hurt: 0, spawn: 0, blinkT: 90 + index * 37, blink: 0, result: null, t: 0, lastLand: 0, eyeY: 0 };
+  };
+
+  // Called once per simulation tick (presentation only).
+  SG.tickVis = function (v, p, phase) {
+    v.t++;
+    const air = !p.onGround;
+    let target = 1;
+    if (air) target = p.vy < 0 ? 1 + Math.min(-p.vy, 12) / 70 : 1 + Math.min(p.vy, 14) / 90;
+    else if (p.vx === 0 && !v.result) target = 1 + Math.sin(v.t * 0.08) * 0.02; // idle breathing
+    v.vsy += (target - v.sy) * 0.28;
+    v.vsy *= 0.72;
+    v.sy += v.vsy;
+    v.sy = SG.clamp(v.sy, 0.55, 1.35);
+    if (!air && p.vx !== 0) v.walk += 0.32;
+    else v.walk *= 0.8;
+    v.lean += ((p.vx / 4) * 0.09 - v.lean) * 0.25;
+    v.eyeY += ((air ? (p.vy < 0 ? -1.5 : 1.5) : 0) - v.eyeY) * 0.3;
+    if (v.happy > 0) v.happy--;
+    if (v.hurt > 0) v.hurt--;
+    if (v.spawn > 0) v.spawn--;
+    if (--v.blinkT <= 0) { v.blink = 7; v.blinkT = 150 + ((v.t * 37) % 120); }
+    if (v.blink > 0) v.blink--;
+    if (air && p.vy > 7 && v.t % 2 === 0) FX.trail(p.x, p.y, p.index);
+    if (phase === 'countdown') v.result = null;
+  };
+
+  SG.visEvent = function (v, ev, p) {
+    switch (ev.type) {
+      case 'jump':
+        v.sy = 1.28; v.vsy = 0;
+        FX.dust(p.x + p.w / 2, p.y + p.h, 5, 10);
+        break;
+      case 'land': {
+        const s = Math.min(ev.speed || 0, 14);
+        v.sy = 1 - s / 30; v.vsy = 0;
+        if (s > 3) FX.dust(p.x + p.w / 2, p.y + p.h, 3 + Math.round(s / 2), 14);
+        break;
+      }
+      case 'stompTop':
+        v.sy = 0.62; v.vsy = 0; v.happy = 40;
+        break;
+      case 'respawn':
+        v.spawn = 20; v.hurt = 0; v.sy = 1; v.vsy = 0;
+        break;
+      default:
+        break;
+    }
+  };
+
+  // ============================================================== drawing
+  // (x, y) = hitbox top-left in world coordinates. Drawn anchored at feet centre.
+  SG.drawFighter = function (ctx, p, v, x, y, opts) {
+    const pal = PAL[p.index];
+    const cx = x + p.w / 2;
+    const by = y + p.h;
+    let sy = v.sy;
+    let hop = 0;
+    let mood = 'normal';
+    if (v.result === 'win') { hop = -Math.abs(Math.sin(v.t * 0.16)) * 12; mood = 'happy'; }
+    else if (v.result === 'lose') { sy = 0.88; mood = 'sad'; }
+    if (v.happy > 0) mood = 'happy';
+    if (!p.onGround && p.vy > 8) mood = mood === 'happy' ? mood : 'fierce';
+    const sx = 1 + (1 - sy) * 0.9;
+    let alpha = 1;
+    if (p.invuln > 0) alpha = Math.floor(p.invuln / 5) % 2 === 0 ? 0.35 : 1; // Day 1 blink rhythm, readable
+    let pop = 1;
+    if (v.spawn > 0) pop = 1 - Math.pow(v.spawn / 20, 2) * 0.6;
+
+    ctx.save();
+    ctx.globalAlpha = alpha * (opts && opts.alpha !== undefined ? opts.alpha : 1);
+    // ground shadow
+    if (p.onGround) {
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.beginPath();
+      ctx.ellipse(cx, by + 1, 16 * sx, 3.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.translate(cx, by + hop);
+    ctx.rotate(v.lean);
+    ctx.scale(sx * pop, sy * pop);
+    const f = p.facing || 1;
+
+    // feet
+    const step = Math.sin(v.walk);
+    const air = !p.onGround;
+    ctx.fillStyle = pal.ink;
+    for (const side of [-1, 1]) {
+      const ph = side * step;
+      const fx = side * 8 + (air ? side * 1.5 : ph * 3.5);
+      const fy = air ? -1 + (p.vy < 0 ? -3 : 2) : -2.5 - Math.max(0, ph) * 3;
+      ctx.beginPath();
+      ctx.ellipse(fx + f * 2, fy, 7, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // crest (silhouette identifier) — Ember: flame tuft · Tide: wave curl
+    if (p.index === 0) {
+      ctx.fillStyle = pal.crest;
+      ctx.strokeStyle = pal.ink;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      const w = Math.sin(v.t * 0.25) * 1.5;
+      ctx.moveTo(-10, -38);
+      ctx.quadraticCurveTo(-12 + w, -50, -6, -55 + w);
+      ctx.quadraticCurveTo(-4, -47, -1, -46);
+      ctx.quadraticCurveTo(0 - w, -58, 6, -61);
+      ctx.quadraticCurveTo(5, -50, 8, -47);
+      ctx.quadraticCurveTo(12 + w, -52, 13, -54);
+      ctx.quadraticCurveTo(14, -44, 10, -38);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = pal.crestTip;
+      ctx.beginPath();
+      ctx.ellipse(2, -48, 2.5, 4, 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = pal.ink;
+      ctx.lineWidth = 2.5;
+      ctx.fillStyle = pal.crest;
+      ctx.beginPath();
+      const w = Math.sin(v.t * 0.12) * 1.2;
+      ctx.moveTo(-12, -38);
+      ctx.bezierCurveTo(-14, -52, 4, -60 + w, 12, -52);
+      ctx.bezierCurveTo(16, -48, 10, -42, 5, -45);
+      ctx.bezierCurveTo(1, -47, 1, -52, 6, -52);
+      ctx.bezierCurveTo(0, -56, -6, -48, -4, -38);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = pal.crestTip;
+      ctx.beginPath();
+      ctx.arc(-6, -48, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // body
+    const top = -42;
+    const bottom = -3;
+    ctx.fillStyle = pal.body;
+    roundRect(ctx, -17, top, 34, bottom - top, 15);
+    ctx.fill();
+    // shading
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = pal.shade;
+    ctx.beginPath();
+    ctx.ellipse(-f * 4, bottom + 4, 26, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = pal.light;
+    ctx.globalAlpha *= 0.7;
+    ctx.beginPath();
+    ctx.ellipse(-f * 8, top + 9, 6, 4, -0.5 * f, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = 2.6;
+    ctx.strokeStyle = pal.ink;
+    roundRect(ctx, -17, top, 34, bottom - top, 15);
+    ctx.stroke();
+
+    // belly emblem (shape-coded: ▲ for P1, ● for P2 — colour-blind friendly)
+    ctx.fillStyle = pal.belly;
+    ctx.beginPath();
+    ctx.ellipse(f * 1.5, -13, 9, 7.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = pal.shade;
+    if (p.index === 0) {
+      ctx.beginPath();
+      ctx.moveTo(f * 1.5, -18.5);
+      ctx.lineTo(f * 1.5 + 5.5, -9.5);
+      ctx.lineTo(f * 1.5 - 5.5, -9.5);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.arc(f * 1.5, -13, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // face
+    const ex = f * 4;
+    const ey = -29 + v.eyeY;
+    ctx.fillStyle = 'rgba(255,120,140,0.45)';
+    ctx.beginPath();
+    ctx.ellipse(ex - 10, ey + 7, 3.5, 2.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(ex + 10, ey + 7, 3.5, 2.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = pal.ink;
+    ctx.fillStyle = pal.ink;
+    ctx.lineCap = 'round';
+    if (mood === 'happy') {
+      ctx.lineWidth = 2.6;
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.arc(ex + s * 6, ey + 1.5, 3.6, Math.PI * 1.1, Math.PI * 1.9);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(ex, ey + 6, 4, 0.15 * Math.PI, 0.85 * Math.PI);
+      ctx.stroke();
+    } else if (v.blink > 0 && mood !== 'fierce') {
+      ctx.lineWidth = 2.4;
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(ex + s * 6 - 3.5, ey);
+        ctx.lineTo(ex + s * 6 + 3.5, ey);
+        ctx.stroke();
+      }
+    } else {
+      for (const s of [-1, 1]) {
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.ellipse(ex + s * 6, ey, 4.6, mood === 'sad' ? 4.2 : 5.8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        ctx.fillStyle = pal.ink;
+        ctx.beginPath();
+        ctx.arc(ex + s * 6 + f * 1.6, ey + (mood === 'sad' ? 1.5 : 0.5) + v.eyeY * 0.6, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(ex + s * 6 + f * 1.6 + 0.9, ey - 0.6, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (mood === 'fierce') {
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.moveTo(ex - 10, ey - 8); ctx.lineTo(ex - 3, ey - 5.5);
+        ctx.moveTo(ex + 10, ey - 8); ctx.lineTo(ex + 3, ey - 5.5);
+        ctx.stroke();
+      } else if (mood === 'sad') {
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(ex - 10, ey - 5); ctx.lineTo(ex - 3, ey - 8);
+        ctx.moveTo(ex + 10, ey - 5); ctx.lineTo(ex + 3, ey - 8);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(ex, ey + 10, 3.5, 1.15 * Math.PI, 1.85 * Math.PI);
+        ctx.stroke();
+        // sweat drop
+        ctx.fillStyle = '#9fe0ff';
+        ctx.beginPath();
+        ctx.ellipse(ex + f * 13, ey - 4 + ((v.t * 0.3) % 6), 2, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(ex, ey + 6.5, 2.6, 0.1 * Math.PI, 0.9 * Math.PI);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  };
+
+  // Squashed "pancake" left behind where a fighter was stomped (then poofs).
+  function drawGhost(ctx, g) {
+    const pal = PAL[g.index];
+    const k = g.t / 34;
+    ctx.save();
+    ctx.globalAlpha = 1 - k;
+    ctx.translate(g.x, g.y + 40);
+    const sy = 0.35 + k * 0.1;
+    ctx.scale(1.45 - k * 0.3, sy);
+    ctx.fillStyle = pal.body;
+    roundRect(ctx, -17, -42, 34, 39, 15);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = pal.ink;
+    ctx.stroke();
+    ctx.restore();
+    // dizzy stars circling
+    ctx.save();
+    ctx.globalAlpha = 1 - k;
+    ctx.fillStyle = '#ffe066';
+    for (let i = 0; i < 3; i++) {
+      const a = g.t * 0.3 + (i * Math.PI * 2) / 3;
+      starPath(ctx, g.x + Math.cos(a) * 16, g.y + 30 + Math.sin(a) * 4, 4, a);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Small emblem used in HUD/labels.
+  SG.drawEmblem = function (ctx, index, x, y, r) {
+    const pal = PAL[index];
+    ctx.fillStyle = pal.body;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (index === 0) {
+      ctx.moveTo(x, y - r);
+      ctx.lineTo(x + r * 0.95, y + r * 0.7);
+      ctx.lineTo(x - r * 0.95, y + r * 0.7);
+      ctx.closePath();
+    } else {
+      ctx.arc(x, y, r * 0.85, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.stroke();
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/render.js
+// render.js — camera, stage art, world rendering, HUD and debug overlay.
+// Pure presentation: reads world state, never modifies it.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+  const C = SG.C;
+  const VW = C.VIEW_W;
+  const VH = C.VIEW_H;
+  const FONT = '"Trebuchet MS", "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif';
+  SG.FONT = FONT;
+
+  // ============================================================== camera
+  // World → screen: screen = (world - (x, top)) * zoom. Bottom of the view stays at world y = 400.
+  SG.createCamera = function (stage) {
+    const cam = { x: 0, top: 0, zoom: 1, stage };
+    SG.snapCamera(cam, null);
+    return cam;
+  };
+  function camTarget(cam, players) {
+    const st = cam.stage;
+    if (!st.scrolling || !players) {
+      const zoom = st.scrolling ? VW / st.width : 1;
+      return { zoom, cx: st.width / 2 };
+    }
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    for (const p of players) {
+      x0 = Math.min(x0, p.x);
+      x1 = Math.max(x1, p.x + p.w);
+    }
+    const zoom = SG.clamp(VW / (x1 - x0 + 380), VW / st.width, 1);
+    return { zoom, cx: (x0 + x1) / 2 };
+  }
+  function applyCam(cam, zoom, cx) {
+    const st = cam.stage;
+    cam.zoom = zoom;
+    const viewW = VW / zoom;
+    cam.x = SG.clamp(cx - viewW / 2, 0, Math.max(0, st.width - viewW));
+    cam.top = VH - VH / zoom;
+    cam.cx = cx;
+  }
+  SG.snapCamera = function (cam, players) {
+    const t = camTarget(cam, players);
+    applyCam(cam, t.zoom, t.cx);
+  };
+  // Frame-rate independent smoothing (dt in seconds). Camera never affects physics.
+  SG.updateCamera = function (cam, players, dt) {
+    if (!cam.stage.scrolling) return applyCam(cam, 1, cam.stage.width / 2);
+    const t = camTarget(cam, players);
+    const k = 1 - Math.exp(-dt * 4.5);
+    const zoom = cam.zoom + (t.zoom - cam.zoom) * k;
+    const cx = (cam.cx === undefined ? t.cx : cam.cx) + (t.cx - (cam.cx === undefined ? t.cx : cam.cx)) * k;
+    applyCam(cam, zoom, cx);
+  };
+
+  // ============================================================== stage themes
+  const THEMES = {
+    meadow: {
+      sky: ['#5fb8ff', '#bfe6ff', '#e8f7ff'],
+      far: '#a9d9a0', mid: '#86c47c', farAmp: 50, midAmp: 30,
+      ground: '#8a5a32', groundDark: '#6d4424', top: '#58b947', topLight: '#7fd86a',
+      plat: '#a1673b', platDark: '#6e4123', platTop: '#5cc14c', platTopLight: '#86e070',
+      mover: '#b57b47', rail: 'rgba(80,50,20,0.25)',
+    },
+    docks: {
+      sky: ['#ff8a5c', '#ffb77a', '#ffe0a8'],
+      far: '#c0627a', mid: '#8f4a6a', farAmp: 28, midAmp: 0,
+      ground: '#7a4a2f', groundDark: '#55311d', top: '#a8714b', topLight: '#c98d62',
+      plat: '#9a6440', platDark: '#5e3a22', platTop: '#c48a5c', platTopLight: '#e0a878',
+      mover: '#8b5a36', rail: 'rgba(255,255,255,0.25)',
+    },
+    cavern: {
+      sky: ['#140b26', '#2a1748', '#3b2160'],
+      far: '#241540', mid: '#311c55', farAmp: 40, midAmp: 30,
+      ground: '#3a2d52', groundDark: '#271e3a', top: '#5e4b82', topLight: '#7d68a8',
+      plat: '#54467a', platDark: '#322850', platTop: '#8fe6ff', platTopLight: '#d4f7ff',
+      mover: '#475a8a', rail: 'rgba(143,230,255,0.25)',
+    },
+    neon: {
+      sky: ['#070a26', '#141a4a', '#2c1b55'],
+      far: '#1a1c48', mid: '#24275f', farAmp: 0, midAmp: 0,
+      ground: '#23243a', groundDark: '#17182a', top: '#ff3df5', topLight: '#ff9cf9',
+      plat: '#353a66', platDark: '#1e2142', platTop: '#39f3ff', platTopLight: '#c4fcff',
+      mover: '#41306e', moverTop: '#ff5cf2', rail: 'rgba(255,92,242,0.28)',
+    },
+  };
+  SG.THEMES = THEMES;
+
+  function ridge(ctx, cam, f, baseScreenY, amp, color, seed, step) {
+    // Parallax silhouette drawn in screen space; u = parallax world coordinate.
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, VH);
+    const z = cam.zoom;
+    for (let sx = 0; sx <= VW + step; sx += step) {
+      const u = (sx / z + cam.x * f) * 1;
+      const h = amp * (0.55 + 0.25 * Math.sin(u * 0.011 + seed) + 0.2 * Math.sin(u * 0.027 + seed * 2.1));
+      ctx.lineTo(sx, baseScreenY - h * z);
+    }
+    ctx.lineTo(VW, VH);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function skyline(ctx, cam, f, baseY, color, seed, windowCol, time) {
+    const z = Math.max(cam.zoom, 0.6);
+    const u0 = cam.x * f;
+    const bw = 46 * z;
+    const first = Math.floor(u0 / 46) - 1;
+    for (let i = first; i < first + Math.ceil(VW / bw) + 3; i++) {
+      const hgt = (60 + SG.hash01(i * 7 + seed) * 110) * z;
+      const sx = (i * 46 - u0) * z;
+      const w = bw - 4 * z;
+      ctx.fillStyle = color;
+      ctx.fillRect(sx, baseY - hgt, w, hgt + 2);
+      if (windowCol) {
+        for (let wy = 0; wy < hgt - 14 * z; wy += 12 * z) {
+          for (let wx = 5 * z; wx < w - 6 * z; wx += 10 * z) {
+            const hsh = SG.hash01(i * 131 + Math.round(wy) * 17 + Math.round(wx) * 3 + seed);
+            if (hsh < 0.33) {
+              const flick = hsh < 0.02 && Math.floor(time / 40 + i) % 3 === 0;
+              ctx.fillStyle = flick ? 'rgba(0,0,0,0)' : hsh < 0.12 ? windowCol[0] : windowCol[1];
+              ctx.fillRect(sx + wx, baseY - hgt + 8 * z + wy, 4 * z, 5 * z);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Background in screen space (behind the world transform).
+  function drawBackdrop(ctx, stage, cam, time) {
+    const th = THEMES[stage.def.theme];
+    const g = ctx.createLinearGradient(0, 0, 0, VH);
+    g.addColorStop(0, th.sky[0]);
+    g.addColorStop(0.6, th.sky[1]);
+    g.addColorStop(1, th.sky[2]);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, VW, VH);
+    const groundScreen = (stage.groundY - cam.top) * cam.zoom;
+    const theme = stage.def.theme;
+    if (theme === 'meadow') {
+      // sun
+      const sg = ctx.createRadialGradient(660, 70, 10, 660, 70, 90);
+      sg.addColorStop(0, 'rgba(255,250,210,1)');
+      sg.addColorStop(0.3, 'rgba(255,240,170,0.9)');
+      sg.addColorStop(1, 'rgba(255,240,170,0)');
+      ctx.fillStyle = sg;
+      ctx.fillRect(560, -30, 200, 200);
+      // clouds
+      for (let i = 0; i < 5; i++) {
+        const cx = ((i * 197 + time * (0.12 + i * 0.03)) % (VW + 200)) - 100;
+        const cy = 40 + ((i * 53) % 90);
+        cloud(ctx, cx, cy, 0.7 + (i % 3) * 0.2);
+      }
+      ridge(ctx, cam, 0.15, groundScreen - 40 * cam.zoom, th.farAmp * 2.2, th.far, 1.3, 16);
+      ridge(ctx, cam, 0.4, groundScreen, th.midAmp * 2.4, th.mid, 4.1, 16);
+    } else if (theme === 'docks') {
+      // big setting sun on the horizon + sea
+      const hz = groundScreen - 70 * cam.zoom;
+      const sg = ctx.createRadialGradient(400, hz, 10, 400, hz, 180);
+      sg.addColorStop(0, 'rgba(255,245,200,1)');
+      sg.addColorStop(0.35, 'rgba(255,200,120,0.9)');
+      sg.addColorStop(1, 'rgba(255,160,100,0)');
+      ctx.fillStyle = sg;
+      ctx.fillRect(200, hz - 190, 400, 380);
+      ctx.fillStyle = '#ffe9b0';
+      ctx.beginPath();
+      ctx.arc(400, hz, 58, Math.PI, 0);
+      ctx.fill();
+      ridge(ctx, cam, 0.1, hz + 2, th.farAmp, th.far, 2.2, 20);
+      const sea = ctx.createLinearGradient(0, hz, 0, groundScreen);
+      sea.addColorStop(0, '#d9667a');
+      sea.addColorStop(1, '#6b3a73');
+      ctx.fillStyle = sea;
+      ctx.fillRect(0, hz, VW, groundScreen - hz + 2);
+      ctx.fillStyle = 'rgba(255,230,170,0.55)';
+      for (let i = 0; i < 14; i++) {
+        const y = hz + 6 + i * ((groundScreen - hz) / 14);
+        const w = 90 - i * 4 + Math.sin(time * 0.05 + i) * 12;
+        ctx.fillRect(400 - w / 2 + Math.sin(time * 0.03 + i * 1.7) * 8, y, w, 2);
+      }
+      // gulls
+      ctx.strokeStyle = 'rgba(60,20,40,0.6)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 3; i++) {
+        const gx = ((time * (0.4 + i * 0.1) + i * 260) % (VW + 100)) - 50;
+        const gy = 60 + i * 30 + Math.sin(time * 0.05 + i) * 6;
+        const fl = Math.sin(time * 0.2 + i) * 3;
+        ctx.beginPath();
+        ctx.moveTo(gx - 8, gy - fl);
+        ctx.quadraticCurveTo(gx - 4, gy - 4, gx, gy);
+        ctx.quadraticCurveTo(gx + 4, gy - 4, gx + 8, gy - fl);
+        ctx.stroke();
+      }
+    } else if (theme === 'cavern') {
+      // stalactites (top) and glowing crystals in the far wall
+      ctx.fillStyle = th.far;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      for (let sx = 0; sx <= VW; sx += 25) {
+        const h = 20 + SG.hash01(Math.floor(sx / 25) + 3) * 50;
+        ctx.lineTo(sx, 0);
+        ctx.lineTo(sx + 12, h);
+      }
+      ctx.lineTo(VW, 0);
+      ctx.fill();
+      ridge(ctx, cam, 0.2, groundScreen - 20, th.farAmp * 2.5, th.far, 0.7, 14);
+      ridge(ctx, cam, 0.45, groundScreen, th.midAmp * 2, th.mid, 3.3, 14);
+      for (let i = 0; i < 9; i++) {
+        const x = 40 + i * 92 + (i % 2) * 20;
+        const y = groundScreen - 40 - SG.hash01(i + 40) * 140;
+        const pulse = 0.55 + 0.45 * Math.sin(time * 0.04 + i * 1.3);
+        crystal(ctx, x, y, 8 + (i % 3) * 4, i % 2 ? `rgba(255,120,220,${0.35 + pulse * 0.35})` : `rgba(120,230,255,${0.35 + pulse * 0.35})`);
+      }
+      // floating motes
+      ctx.fillStyle = 'rgba(190,240,255,0.6)';
+      for (let i = 0; i < 18; i++) {
+        const x = (i * 47 + Math.sin(time * 0.01 + i) * 30 + 800) % VW;
+        const y = (VH - ((time * (0.2 + (i % 4) * 0.08) + i * 60) % VH));
+        ctx.fillRect(x, y, 2, 2);
+      }
+    } else if (theme === 'neon') {
+      // stars + moon
+      for (let i = 0; i < 60; i++) {
+        const x = SG.hash01(i) * VW;
+        const y = SG.hash01(i + 100) * 220;
+        const tw = 0.4 + 0.6 * Math.abs(Math.sin(time * 0.03 + i));
+        ctx.fillStyle = `rgba(255,255,255,${tw * 0.8})`;
+        ctx.fillRect(x, y, 1.5, 1.5);
+      }
+      ctx.fillStyle = '#fdf3c8';
+      ctx.beginPath();
+      ctx.arc(130, 70, 26, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = th.sky[0];
+      ctx.beginPath();
+      ctx.arc(142, 62, 22, 0, Math.PI * 2);
+      ctx.fill();
+      skyline(ctx, cam, 0.15, groundScreen - 10, th.far, 3, null, time);
+      skyline(ctx, cam, 0.4, groundScreen, th.mid, 9, ['#ffd75e', '#5ef0ff'], time);
+    }
+  }
+
+  function cloud(ctx, x, y, s) {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.arc(x, y, 18 * s, 0, Math.PI * 2);
+    ctx.arc(x + 22 * s, y - 8 * s, 22 * s, 0, Math.PI * 2);
+    ctx.arc(x + 46 * s, y, 17 * s, 0, Math.PI * 2);
+    ctx.rect(x, y, 46 * s, 14 * s);
+    ctx.fill();
+  }
+
+  function crystal(ctx, x, y, s, col) {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(x, y - s * 2);
+    ctx.lineTo(x + s * 0.7, y);
+    ctx.lineTo(x, y + s * 1.2);
+    ctx.lineTo(x - s * 0.7, y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // World-space ground band and decorations.
+  function drawGround(ctx, stage, cam, time) {
+    const th = THEMES[stage.def.theme];
+    const gy = stage.groundY;
+    const x0 = cam.x - 10;
+    const x1 = cam.x + VW / cam.zoom + 10;
+    const bottom = VH + 20;
+    ctx.fillStyle = th.ground;
+    ctx.fillRect(x0, gy, x1 - x0, bottom - gy);
+    ctx.fillStyle = th.groundDark;
+    const theme = stage.def.theme;
+    if (theme === 'docks') {
+      for (let x = Math.floor(x0 / 50) * 50; x < x1; x += 50) ctx.fillRect(x, gy, 3, bottom - gy);
+      for (let x = Math.floor(x0 / 100) * 100 + 20; x < x1; x += 100) {
+        ctx.fillStyle = '#4a2a17';
+        ctx.fillRect(x, gy + 12, 12, bottom - gy);
+        ctx.fillStyle = th.groundDark;
+      }
+    } else if (theme === 'neon') {
+      for (let x = Math.floor(x0 / 80) * 80; x < x1; x += 80) ctx.fillRect(x, gy + 26, 40, 4);
+    } else {
+      for (let i = Math.floor(x0 / 37); i * 37 < x1; i++) {
+        const h = SG.hash01(i + 7);
+        ctx.fillRect(i * 37 + h * 20, gy + 18 + h * 30, 8 + h * 6, 4);
+      }
+    }
+    ctx.fillStyle = th.top;
+    ctx.fillRect(x0, gy, x1 - x0, theme === 'neon' ? 4 : 8);
+    if (theme === 'neon') {
+      ctx.shadowColor = th.top;
+      ctx.shadowBlur = 12;
+      ctx.fillRect(x0, gy, x1 - x0, 3);
+      ctx.shadowBlur = 0;
+    }
+    ctx.fillStyle = th.topLight;
+    ctx.fillRect(x0, gy, x1 - x0, 2);
+    if (theme === 'meadow') {
+      // tufts & flowers (deterministic layout)
+      for (let i = Math.floor(x0 / 23); i * 23 < x1; i++) {
+        const h = SG.hash01(i * 3 + 1);
+        const x = i * 23 + h * 12;
+        ctx.fillStyle = th.top;
+        ctx.beginPath();
+        ctx.moveTo(x - 3, gy);
+        ctx.lineTo(x, gy - 5 - h * 4);
+        ctx.lineTo(x + 3, gy);
+        ctx.fill();
+        if (h > 0.82) {
+          ctx.fillStyle = h > 0.91 ? '#fff3a0' : '#ff9ad5';
+          ctx.beginPath();
+          ctx.arc(x + 6, gy - 4, 2.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    } else if (theme === 'cavern') {
+      for (let i = Math.floor(x0 / 60); i * 60 < x1; i++) {
+        const h = SG.hash01(i + 77);
+        if (h > 0.5) crystal(ctx, i * 60 + h * 30, gy - 4, 4 + h * 3, h > 0.75 ? 'rgba(255,140,230,0.8)' : 'rgba(140,235,255,0.8)');
+      }
+    }
+  }
+
+  function drawPlatforms(ctx, stage, alpha, time) {
+    const th = THEMES[stage.def.theme];
+    const theme = stage.def.theme;
+    // motion rails first (show where movers travel → predictable)
+    for (const pl of stage.platforms) {
+      if (!pl.move) continue;
+      ctx.strokeStyle = th.rail;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      if (pl.move.axis === 'x') {
+        const a = pl.baseX;
+        const b = pl.baseX + pl.move.dir * pl.move.range;
+        const y = pl.baseY + pl.h / 2;
+        ctx.moveTo(Math.min(a, b) + 6, y);
+        ctx.lineTo(Math.max(a, b) + pl.w - 6, y);
+      } else {
+        const x = pl.baseX + pl.w / 2;
+        ctx.moveTo(x, pl.baseY + pl.h);
+        ctx.lineTo(x, pl.baseY - pl.move.range);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (const pl of stage.platforms) {
+      const x = pl.px !== undefined ? SG.lerp(pl.px, pl.x, alpha) : pl.x;
+      const y = pl.py !== undefined ? SG.lerp(pl.py, pl.y, alpha) : pl.y;
+      const moving = !!pl.move;
+      const w = pl.w;
+      const h = pl.h;
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(x + 3, y + h, w - 6, 4);
+      ctx.fillStyle = moving ? th.mover : th.plat;
+      SG.roundRect(ctx, x, y, w, h + 2, 4);
+      ctx.fill();
+      ctx.fillStyle = th.platDark;
+      ctx.fillRect(x + 2, y + h - 2, w - 4, 4);
+      const topCol = moving && th.moverTop ? th.moverTop : th.platTop;
+      if (theme === 'neon' || theme === 'cavern') {
+        ctx.shadowColor = topCol;
+        ctx.shadowBlur = 10;
+      }
+      ctx.fillStyle = topCol;
+      ctx.fillRect(x, y, w, 4);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = th.platTopLight;
+      ctx.fillRect(x + 2, y, w - 4, 1.5);
+      if (theme === 'meadow') {
+        ctx.fillStyle = th.platDark;
+        for (let k = 18; k < w - 8; k += 28) ctx.fillRect(x + k, y + 6, 2, 5);
+      } else if (theme === 'docks') {
+        ctx.fillStyle = th.platDark;
+        for (let k = 22; k < w; k += 22) ctx.fillRect(x + k, y + 4, 2, h - 2);
+        if (moving) {
+          ctx.fillStyle = '#e8d3a0';
+          ctx.fillRect(x + 6, y + 5, 3, 6);
+          ctx.fillRect(x + w - 9, y + 5, 3, 6);
+        }
+      } else if (moving) {
+        // lift / slider arrows
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        const mx = x + w / 2;
+        const my = y + 8;
+        ctx.beginPath();
+        if (pl.move.axis === 'y') {
+          ctx.moveTo(mx - 4, my); ctx.lineTo(mx, my - 3); ctx.lineTo(mx + 4, my);
+        } else {
+          ctx.moveTo(mx - 7, my - 2); ctx.lineTo(mx - 10, my); ctx.lineTo(mx - 7, my + 2);
+          ctx.moveTo(mx + 7, my - 2); ctx.lineTo(mx + 10, my); ctx.lineTo(mx + 7, my + 2);
+        }
+        ctx.fill();
+      }
+    }
+  }
+
+  // ============================================================== world
+  SG.drawWorld = function (ctx, world, cam, vis, alpha, opts) {
+    const time = opts.uiTicks || 0;
+    const stage = world.stage;
+    let shx = 0;
+    let shy = 0;
+    if (opts.shake && SG.FX.shake > 0) {
+      shx = (SG.FX.rng() * 2 - 1) * SG.FX.shake;
+      shy = (SG.FX.rng() * 2 - 1) * SG.FX.shake;
+    }
+    ctx.save();
+    ctx.translate(shx, shy);
+    drawBackdrop(ctx, stage, cam, time);
+    ctx.save();
+    ctx.scale(cam.zoom, cam.zoom);
+    ctx.translate(-cam.x, -cam.top);
+    drawGround(ctx, stage, cam, time);
+    drawPlatforms(ctx, stage, alpha, time);
+    // fighters (draw the higher one last so the attacker reads on top)
+    const order = world.players.slice().sort((a, b) => b.y - a.y);
+    for (const p of order) {
+      const ok = p.px !== undefined && Math.abs(p.px - p.x) < 40 && Math.abs(p.py - p.y) < 40;
+      const x = ok ? SG.lerp(p.px, p.x, alpha) : p.x;
+      const y = ok ? SG.lerp(p.py, p.y, alpha) : p.y;
+      SG.drawFighter(ctx, p, vis[p.index], x, y);
+      if (opts.labels) drawTag(ctx, p, x, y, opts.names[p.index], cam.zoom);
+    }
+    SG.FX.draw(ctx);
+    if (opts.debug) drawHitboxes(ctx, world);
+    ctx.restore();
+    // off-screen indicators
+    for (const p of world.players) {
+      const sy = (p.y + p.h - cam.top) * cam.zoom;
+      if (sy < 4) {
+        const sx = (p.x + p.w / 2 - cam.x) * cam.zoom;
+        ctx.fillStyle = SG.PALETTE[p.index].body;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sx, 4);
+        ctx.lineTo(sx - 9, 18);
+        ctx.lineTo(sx + 9, 18);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    if (SG.FX.flash > 0) {
+      ctx.fillStyle = SG.FX.flashColor;
+      ctx.globalAlpha = SG.FX.flash * 0.35;
+      ctx.fillRect(-20, -20, VW + 40, VH + 40);
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  };
+
+  function drawTag(ctx, p, x, y, name, zoom) {
+    const cx = x + p.w / 2;
+    const ty = y - 30;
+    const s = 1 / Math.max(zoom, 0.75);
+    ctx.save();
+    ctx.translate(cx, ty);
+    ctx.scale(s, s);
+    ctx.globalAlpha = p.invuln > 0 ? 0.6 : 0.95;
+    ctx.font = `bold 11px ${FONT}`;
+    const tw = ctx.measureText(name).width + 22;
+    ctx.fillStyle = SG.PALETTE[p.index].ink;
+    SG.roundRect(ctx, -tw / 2, -9, tw, 16, 8);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-4, 7);
+    ctx.lineTo(4, 7);
+    ctx.lineTo(0, 11);
+    ctx.fill();
+    SG.drawEmblem(ctx, p.index, -tw / 2 + 9, -1, 5);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(name, 6, 0);
+    ctx.restore();
+  }
+
+  function drawHitboxes(ctx, world) {
+    ctx.lineWidth = 1;
+    for (const pl of world.stage.platforms) {
+      ctx.strokeStyle = 'rgba(255,255,0,0.9)';
+      ctx.strokeRect(pl.x, pl.y, pl.w, pl.h);
+    }
+    for (const p of world.players) {
+      ctx.strokeStyle = p.invuln > 0 ? 'rgba(0,255,255,0.95)' : 'rgba(0,255,0,0.95)';
+      ctx.strokeRect(p.x, p.y, p.w, p.h);
+      ctx.strokeStyle = 'rgba(255,0,0,0.9)';
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y + C.STOMP_TOLERANCE);
+      ctx.lineTo(p.x + p.w, p.y + C.STOMP_TOLERANCE);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(0, world.stage.groundY);
+    ctx.lineTo(world.stage.width, world.stage.groundY);
+    ctx.stroke();
+  }
+
+  // ============================================================== text helpers
+  SG.text = function (ctx, str, x, y, o) {
+    o = o || {};
+    ctx.font = `${o.weight || 'bold'} ${o.size || 16}px ${FONT}`;
+    ctx.textAlign = o.align || 'center';
+    ctx.textBaseline = o.baseline || 'middle';
+    if (o.stroke) {
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = o.strokeWidth || 4;
+      ctx.strokeStyle = o.stroke;
+      ctx.strokeText(str, x, y);
+    }
+    ctx.fillStyle = o.color || '#fff';
+    ctx.fillText(str, x, y);
+  };
+
+  const fmtTime = (ticks) => {
+    const s = Math.max(0, Math.ceil(ticks / C.TICK_RATE));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+  SG.fmtElapsed = (ticks) => {
+    const ms = Math.floor(ticks * C.TICK_MS);
+    return `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(Math.floor((ms % 1000) / 10)).padStart(2, '0')}`;
+  };
+
+  // ============================================================== HUD
+  SG.createHud = () => ({ pulse: [0, 0], goT: 0, banner: null, lastCount: 3, countT: 0 });
+
+  SG.hudEvent = function (hud, ev) {
+    if (ev.type === 'score') hud.pulse[ev.who] = 1;
+    if (ev.type === 'go') hud.goT = 50;
+    if (ev.type === 'count' || ev.type === 'roundStart') { hud.lastCount = ev.n || 3; hud.countT = 0; }
+    if (ev.type === 'suddenDeath') hud.banner = { kind: 'sudden', t: 0 };
+    if (ev.type === 'roundEnd') hud.banner = { kind: 'round', winner: ev.winner, reason: ev.reason, matchOver: ev.matchOver, t: 0 };
+    if (ev.type === 'roundStart') hud.banner = null;
+  };
+  SG.hudTick = function (hud) {
+    for (let i = 0; i < 2; i++) hud.pulse[i] *= 0.9;
+    if (hud.goT > 0) hud.goT--;
+    hud.countT++;
+    if (hud.banner) hud.banner.t++;
+  };
+
+  SG.drawHud = function (ctx, world, hud, names, time) {
+    const t = SG.t;
+    const [a, b] = world.players;
+    const opts = world.opts;
+    const practice = opts.winScore === 0;
+    // score panel
+    const pw = 300;
+    const px = VW / 2 - pw / 2;
+    ctx.fillStyle = 'rgba(10,12,30,0.62)';
+    SG.roundRect(ctx, px, 8, pw, 50, 14);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    for (let i = 0; i < 2; i++) {
+      const p = world.players[i];
+      const side = i === 0 ? -1 : 1;
+      const sx = VW / 2 + side * 62;
+      const scale = 1 + hud.pulse[i] * 0.5;
+      ctx.save();
+      ctx.translate(sx, 34);
+      ctx.scale(scale, scale);
+      SG.text(ctx, String(p.score), 0, 0, { size: 30, weight: '900', color: i === 0 ? '#ff7a70' : '#6fb8ff', stroke: 'rgba(0,0,0,0.5)', strokeWidth: 4 });
+      ctx.restore();
+      SG.drawEmblem(ctx, i, VW / 2 + side * 128, 24, 6);
+      SG.text(ctx, names[i], VW / 2 + side * 128, 43, { size: 11, color: '#e8ecff' });
+      if (!practice && opts.winScore > 1 && p.score === opts.winScore - 1 && world.phase === 'playing' && !world.suddenDeath) {
+        const pulse = 0.7 + 0.3 * Math.sin(time * 0.2);
+        ctx.globalAlpha = pulse;
+        SG.text(ctx, t('matchPoint'), sx, 68, { size: 11, weight: '900', color: '#ffd23f', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 3 });
+        ctx.globalAlpha = 1;
+      }
+    }
+    // centre: timer or elapsed
+    if (opts.timeLimit > 0) {
+      const left = opts.timeLimit * C.TICK_RATE - world.tick;
+      const urgent = left < 10 * C.TICK_RATE && world.phase === 'playing' && !world.suddenDeath;
+      SG.text(ctx, world.suddenDeath ? 'SD' : fmtTime(left), VW / 2, 30, { size: 20, weight: '900', color: urgent && Math.floor(time / 15) % 2 ? '#ff5a5a' : '#fff' });
+      SG.text(ctx, t('timer'), VW / 2, 47, { size: 9, color: 'rgba(255,255,255,0.6)', weight: 'normal' });
+    } else {
+      SG.text(ctx, practice ? t('practiceTag') : 'VS', VW / 2, 28, { size: practice ? 12 : 16, weight: '900', color: '#ffffff' });
+      SG.text(ctx, SG.fmtElapsed(world.tick), VW / 2, 46, { size: 10, weight: 'normal', color: 'rgba(255,255,255,0.7)' });
+    }
+    // round pips
+    if (opts.bestOf > 1) {
+      const need = SG.roundsToWin(world);
+      for (let i = 0; i < 2; i++) {
+        for (let k = 0; k < need; k++) {
+          const x = VW / 2 + (i === 0 ? -1 : 1) * (28 + k * 12);
+          ctx.beginPath();
+          ctx.arc(x, 64, 4, 0, Math.PI * 2);
+          ctx.fillStyle = k < world.roundWins[i] ? (i === 0 ? '#ff7a70' : '#6fb8ff') : 'rgba(0,0,0,0.45)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+    }
+    if (practice) SG.text(ctx, t('practiceHint'), VW - 10, VH - 12, { size: 11, align: 'right', color: 'rgba(255,255,255,0.75)', stroke: 'rgba(0,0,0,0.5)', strokeWidth: 3 });
+
+    // countdown
+    if (world.phase === 'countdown') {
+      const n = Math.ceil(world.countdown / C.TICK_RATE);
+      const frac = (world.countdown % C.TICK_RATE) / C.TICK_RATE;
+      const s = 1 + (frac > 0.75 ? (frac - 0.75) * 2.4 : 0);
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(0, 0, VW, VH);
+      if (opts.bestOf > 1) {
+        const last = world.roundWins[0] === SG.roundsToWin(world) - 1 && world.roundWins[1] === SG.roundsToWin(world) - 1;
+        SG.text(ctx, last ? t('finalRound') : t('round', world.round), VW / 2, 120, { size: 26, weight: '900', color: '#ffd23f', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 5 });
+      }
+      ctx.save();
+      ctx.translate(VW / 2, 200);
+      ctx.scale(s, s);
+      SG.text(ctx, String(n), 0, 0, { size: 86, weight: '900', color: '#fff', stroke: '#1a1030', strokeWidth: 8 });
+      ctx.restore();
+    } else if (hud.goT > 0) {
+      const k = hud.goT / 50;
+      ctx.globalAlpha = Math.min(1, k * 2);
+      ctx.save();
+      ctx.translate(VW / 2, 200);
+      ctx.scale(1 + (1 - k) * 0.6, 1 + (1 - k) * 0.6);
+      SG.text(ctx, t('go'), 0, 0, { size: 90, weight: '900', color: '#ffd23f', stroke: '#1a1030', strokeWidth: 8 });
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+    // banners
+    const bn = hud.banner;
+    if (bn && bn.kind === 'sudden' && bn.t < 150) {
+      const a1 = bn.t < 120 ? 1 : 1 - (bn.t - 120) / 30;
+      ctx.globalAlpha = a1;
+      SG.text(ctx, t('suddenDeath'), VW / 2, 170, { size: 46, weight: '900', color: '#ff5a5a', stroke: '#1a1030', strokeWidth: 7 });
+      SG.text(ctx, t('suddenSub'), VW / 2, 210, { size: 18, color: '#fff', stroke: '#1a1030', strokeWidth: 4 });
+      ctx.globalAlpha = 1;
+    } else if (bn && bn.kind === 'round' && world.phase === 'roundEnd') {
+      const k = Math.min(1, bn.t / 12);
+      ctx.fillStyle = `rgba(0,0,0,${0.35 * k})`;
+      ctx.fillRect(0, 140, VW, 110);
+      const name = names[bn.winner];
+      if (bn.reason === 'time') SG.text(ctx, t('timeUp'), VW / 2, 158, { size: 20, weight: '900', color: '#ffd23f', stroke: '#1a1030', strokeWidth: 4 });
+      ctx.save();
+      ctx.translate(VW / 2, 198);
+      const s = 0.6 + 0.4 * k + (bn.t < 20 ? Math.sin(bn.t * 0.5) * 0.04 : 0);
+      ctx.scale(s, s);
+      const label = bn.matchOver ? t('winsRound', name) : t('roundTo', name);
+      SG.text(ctx, label, 0, 0, { size: 44, weight: '900', color: bn.winner === 0 ? '#ff7a70' : '#6fb8ff', stroke: '#fff', strokeWidth: 6 });
+      ctx.restore();
+    }
+  };
+
+  // ============================================================== debug overlay
+  SG.drawDebug = function (ctx, game, fps) {
+    const lines = [`FPS ${fps}   screen ${game.stack.join('>')}`];
+    const s = game.session;
+    if (s) {
+      const w = s.world;
+      lines.push(`phase ${w.phase}  tick ${w.tick}  time ${w.time}  round ${w.round}  cd ${w.countdown}`);
+      for (const p of w.players) {
+        lines.push(`P${p.index + 1} pos ${p.x.toFixed(1)},${p.y.toFixed(1)}  v ${p.vx.toFixed(1)},${p.vy.toFixed(2)}`);
+        lines.push(`   gnd ${p.onGround ? 1 : 0} ride ${p.riding} coy ${p.coyote} buf ${p.jumpBuffer} inv ${p.invuln}`);
+      }
+      const ov = SG.overlaps(w.players[0], w.players[1]);
+      lines.push(`contact ${ov ? 'YES' : 'no'}`);
+      if (s.online) {
+        const o = s.online;
+        const n = game.net;
+        lines.push(`NET P${o.slot + 1} #${n ? n.code : '-'} rtt ${n && n.rtt >= 0 ? Math.round(n.rtt) + 'ms' : '?'} f ${o.n} buf ${o.queue.length} stall ${o.stalls} desync ${o.desyncs}`);
+      }
+      if (s.ai) lines.push(`AI L${s.ai.level} ${s.ai.mode}  plan ${s.ai.planLen}  in ${['left', 'right', 'jumpHeld'].filter((k) => s.aiInput[k]).join('+') || '-'}`);
+    }
+    ctx.font = `12px Consolas, monospace`;
+    const w = 380;
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.fillRect(6, VH - 10 - lines.length * 15, w, lines.length * 15 + 6);
+    ctx.fillStyle = '#5f5';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    lines.forEach((l, i) => ctx.fillText(l, 12, VH - 6 - lines.length * 15 + i * 15));
+  };
+
+  // Static preview of a stage (used by stage select / menu backgrounds).
+  SG.drawStagePreview = function (ctx, stage, x, y, w, h, time, vis) {
+    const zoom = w / stage.width;
+    const cam = { x: 0, top: VH - h / zoom, zoom, stage, cx: stage.width / 2 };
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.translate(x, y);
+    // backdrop expects an 800x400 screen: scale it into the box
+    ctx.save();
+    ctx.scale(w / VW, h / VH);
+    const bz = VW / stage.width;
+    drawBackdrop(ctx, stage, { x: 0, top: VH - VH / bz, zoom: bz, stage }, time);
+    ctx.restore();
+    ctx.scale(zoom, zoom);
+    ctx.translate(0, -cam.top);
+    drawGround(ctx, stage, { x: 0, zoom: zoom, top: cam.top }, time);
+    drawPlatforms(ctx, stage, 1, time);
+    if (vis) {
+      for (let i = 0; i < 2; i++) {
+        const p = { index: i, x: stage.spawns[i], y: stage.groundY - C.PLAYER_H, w: C.PLAYER_W, h: C.PLAYER_H, vx: 0, vy: 0, onGround: true, facing: i === 0 ? 1 : -1, invuln: 0 };
+        SG.drawFighter(ctx, p, vis[i], p.x, p.y);
+      }
+    }
+    ctx.restore();
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/ui.js
+// ui.js — draws every non-gameplay screen and overlay from the Game model (game.js).
+// Also records clickable row rectangles for mouse support.
+(function (root) {
+  'use strict';
+  const SG = root.SG;
+  const C = SG.C;
+  const VW = C.VIEW_W;
+  const VH = C.VIEW_H;
+  const t = (...a) => SG.t(...a);
+
+  const UI = {
+    rects: [],
+    menuVis: [SG.createVis(0), SG.createVis(1)],
+    resultVis: [SG.createVis(0), SG.createVis(1)],
+    previewStages: {},
+  };
+  SG.UI = UI;
+
+  function stageFor(id) {
+    if (!UI.previewStages[id]) UI.previewStages[id] = SG.buildStage(SG.getStageDef(id));
+    return UI.previewStages[id];
+  }
+
+  function panel(x, y, w, h, alpha) {
+    const ctx = UI.ctx;
+    ctx.fillStyle = `rgba(14,16,40,${alpha === undefined ? 0.82 : alpha})`;
+    SG.roundRect(ctx, x, y, w, h, 18);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  function title(str, y, size, color) {
+    SG.text(UI.ctx, str, VW / 2, y, { size: size || 32, weight: '900', color: color || '#fff', stroke: '#1a1030', strokeWidth: 6 });
+  }
+
+  function hint(str) {
+    const ctx = UI.ctx;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, VH - 24, VW, 24);
+    SG.text(ctx, str, VW / 2, VH - 12, { size: 12, weight: 'normal', color: 'rgba(255,255,255,0.85)' });
+  }
+
+  // Animated menu backdrop: the selected stage with both fighters idling.
+  function backdrop(game, time) {
+    const ctx = UI.ctx;
+    const st = stageFor(SG.STAGES[game.stageIndex].id);
+    const v = UI.menuVis;
+    SG.drawStagePreview(ctx, st, 0, 0, VW, VH, time, v);
+    ctx.fillStyle = 'rgba(8,8,30,0.45)';
+    ctx.fillRect(0, 0, VW, VH);
+  }
+
+  function menuTickVis(time) {
+    for (let i = 0; i < 2; i++) {
+      const fake = { index: i, onGround: true, vx: 0, vy: 0, x: 0, y: 0 };
+      SG.tickVis(UI.menuVis[i], fake, 'menu');
+    }
+  }
+  UI.tick = menuTickVis;
+
+  // Generic vertical list menu.
+  function list(game, items, opt) {
+    const ctx = UI.ctx;
+    const n = items.length;
+    const w = opt.w || 460;
+    const x = VW / 2 - w / 2;
+    const top = opt.top || 112;
+    const avail = (opt.bottom || VH - 34) - top;
+    const gap = Math.min(opt.gap || 36, avail / n);
+    const size = gap < 24 ? 14 : 17;
+    const sel = game.cursor[game.top()] || 0;
+    const rowRects = [];
+    const valueRects = []; // checked first: tapping the ‹ / › side of a value changes it
+    panel(x, top - 14, w, gap * n + 22, opt.alpha);
+    items.forEach((it, i) => {
+      const y = top + gap * i + gap / 2;
+      const active = i === sel;
+      rowRects.push({ x, y: y - gap / 2, w, h: gap, index: i });
+      if (it.adjust && !it.ok) {
+        valueRects.push({ x: x + w - 250, y: y - gap / 2, w: 125, h: gap, index: i, action: 'dec' });
+        valueRects.push({ x: x + w - 125, y: y - gap / 2, w: 125, h: gap, index: i, action: 'inc' });
+      }
+      if (active) {
+        const g = ctx.createLinearGradient(x, 0, x + w, 0);
+        g.addColorStop(0, 'rgba(255,90,90,0.55)');
+        g.addColorStop(1, 'rgba(70,150,255,0.55)');
+        ctx.fillStyle = g;
+        SG.roundRect(ctx, x + 10, y - gap / 2 + 2, w - 20, gap - 4, Math.min(12, gap / 2 - 2));
+        ctx.fill();
+        const bob = Math.sin(game.uiTicks * 0.2) * 2;
+        SG.text(ctx, '▶', x + 26 + bob, y, { size: size - 3, color: '#ffd23f' });
+      }
+      const label = it.label();
+      const hasValue = it.value || it.slider;
+      SG.text(ctx, label, hasValue ? x + 44 : VW / 2, y, { size, align: hasValue ? 'left' : 'center', color: active ? '#fff' : 'rgba(235,238,255,0.85)' });
+      if (it.slider) {
+        const v = it.slider();
+        const bx = x + w - 200;
+        for (let k = 0; k < 10; k++) {
+          ctx.fillStyle = k < v ? (active ? '#ffd23f' : '#c9cff5') : 'rgba(255,255,255,0.15)';
+          ctx.fillRect(bx + k * 15, y - 6, 11, 12);
+        }
+        SG.text(ctx, String(v), x + w - 30, y, { size: size - 2, color: '#fff' });
+      } else if (it.value) {
+        const val = it.value();
+        const vx = x + w - 34;
+        if (it.adjust && (active || game.touchUI)) {
+          ctx.font = `bold ${size}px ${SG.FONT}`;
+          const vw = ctx.measureText(val).width;
+          SG.text(ctx, '‹', vx - vw - 14, y, { size: size + 2, color: '#ffd23f' });
+          SG.text(ctx, '›', vx + 12, y, { size: size + 2, color: '#ffd23f' });
+        }
+        SG.text(ctx, val, vx, y, { size, align: 'right', color: active ? '#ffe9a0' : '#c9cff5' });
+      }
+    });
+    UI.rects = valueRects.concat(rowRects);
+  }
+
+  function drawTitle(game, time) {
+    const ctx = UI.ctx;
+    backdrop(game, time);
+    const bounce = Math.sin(time * 0.05) * 4;
+    ctx.save();
+    ctx.translate(VW / 2, 120 + bounce);
+    const r = 1 + Math.sin(time * 0.03) * 0.015;
+    ctx.scale(r, r);
+    SG.text(ctx, 'STOMP', -92, 0, { size: 74, weight: '900', color: '#ff5a4f', stroke: '#1a0b1e', strokeWidth: 12 });
+    SG.text(ctx, 'DUEL', 150, 0, { size: 74, weight: '900', color: '#3f9bff', stroke: '#1a0b1e', strokeWidth: 12 });
+    ctx.restore();
+    // crown star between the words
+    ctx.fillStyle = '#ffd23f';
+    SG.starPath(ctx, VW / 2 + 32, 76 + bounce, 13, time * 0.02);
+    ctx.fill();
+    SG.text(ctx, t('subtitle'), VW / 2, 178, { size: 17, color: '#fff', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 4 });
+    if (Math.floor(time / 30) % 2 === 0) SG.text(ctx, game.touchUI ? t('tapStart') : t('pressStart'), VW / 2, 250, { size: 22, weight: '900', color: '#ffd23f', stroke: '#1a1030', strokeWidth: 5 });
+    SG.text(ctx, 'v1.1', VW - 12, VH - 10, { size: 10, align: 'right', color: 'rgba(255,255,255,0.55)', weight: 'normal' });
+  }
+
+  function drawMain(game, time) {
+    backdrop(game, time);
+    title(SG.GAME_TITLE, 62, 40);
+    list(game, game.menuItems(), { top: 108, gap: 38, w: 380 });
+    hint(t('menuHint'));
+  }
+
+  function drawSetup(game, time) {
+    backdrop(game, time);
+    const mode = game.settings.setup.mode;
+    title(mode === 'cpu' ? t('vsCpu') : mode === 'practice' ? t('practice') : mode === 'online' ? t('onlineTitle') : t('localVs'), 62, 34);
+    SG.text(UI.ctx, t('matchSetup'), VW / 2, 92, { size: 14, color: 'rgba(255,255,255,0.8)' });
+    list(game, game.menuItems(), { top: 124, gap: 40, w: 520 });
+    hint(t('menuHint'));
+  }
+
+  function drawStageSelect(game, time) {
+    const ctx = UI.ctx;
+    const def = SG.STAGES[game.stageIndex];
+    const st = stageFor(def.id);
+    backdrop(game, time);
+    title(t('stageSelect'), 40, 30);
+    const bw = 440;
+    const bh = 220;
+    const bx = VW / 2 - bw / 2;
+    const by = 64;
+    ctx.fillStyle = '#000';
+    SG.roundRect(ctx, bx - 6, by - 6, bw + 12, bh + 12, 14);
+    ctx.fill();
+    // live preview: platforms move as they do in-game
+    const tt = Math.floor(time) % 100000;
+    SG.updatePlatforms(st, tt);
+    for (const pl of st.platforms) { pl.px = undefined; pl.py = undefined; }
+    SG.drawStagePreview(ctx, st, bx, by, bw, bh, time, UI.menuVis);
+    ctx.strokeStyle = '#ffd23f';
+    ctx.lineWidth = 3;
+    SG.roundRect(ctx, bx - 4, by - 4, bw + 8, bh + 8, 12);
+    ctx.stroke();
+    const pulse = Math.sin(time * 0.15) * 4;
+    SG.text(ctx, '◀', bx - 34 - pulse, by + bh / 2, { size: 30, color: '#ffd23f', stroke: '#1a1030', strokeWidth: 5 });
+    SG.text(ctx, '▶', bx + bw + 34 + pulse, by + bh / 2, { size: 30, color: '#ffd23f', stroke: '#1a1030', strokeWidth: 5 });
+    UI.rects = [
+      { x: bx - 60, y: by + bh / 2 - 30, w: 50, h: 60, index: -1, action: 'prev' },
+      { x: bx + bw + 10, y: by + bh / 2 - 30, w: 50, h: 60, index: -1, action: 'next' },
+      { x: bx, y: by, w: bw, h: bh, index: -1, action: 'start' },
+    ];
+    const name = def.name[SG.lang] || def.name.en;
+    const desc = def.desc[SG.lang] || def.desc.en;
+    SG.text(ctx, name, VW / 2, by + bh + 24, { size: 24, weight: '900', color: '#fff', stroke: '#1a1030', strokeWidth: 5 });
+    SG.text(ctx, desc, VW / 2, by + bh + 47, { size: 13, color: '#e6e9ff', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 3 });
+    // tags
+    let tx = VW / 2 - (def.tags.length - 1) * 75;
+    for (const tag of def.tags) {
+      const label = t('tag_' + tag);
+      ctx.font = `bold 10px ${SG.FONT}`;
+      const w = ctx.measureText(label).width + 16;
+      ctx.fillStyle = tag === 'moving' ? '#8a3df0' : tag === 'wide' ? '#1d8a6a' : '#b0602a';
+      SG.roundRect(ctx, tx - w / 2, by - 2 + 10, w, 16, 8);
+      ctx.fill();
+      SG.text(ctx, label, tx, by + 16, { size: 10, color: '#fff' });
+      tx += 150;
+    }
+    // page dots
+    for (let i = 0; i < SG.STAGES.length; i++) {
+      ctx.beginPath();
+      ctx.arc(VW / 2 + (i - (SG.STAGES.length - 1) / 2) * 16, VH - 40, 4, 0, Math.PI * 2);
+      ctx.fillStyle = i === game.stageIndex ? '#ffd23f' : 'rgba(255,255,255,0.35)';
+      ctx.fill();
+    }
+    hint(t('stageHint'));
+  }
+
+  function drawSettings(game, time, inMatch) {
+    if (!inMatch) backdrop(game, time);
+    title(t('settings'), 40, 30);
+    list(game, game.menuItems(), { top: 74, gap: 26, w: 540, bottom: VH - 30 });
+    hint(t('menuHint'));
+  }
+
+  function drawControls(game, time, inMatch) {
+    const ctx = UI.ctx;
+    if (!inMatch) backdrop(game, time);
+    title(t('controlsTitle'), 40, 30);
+    list(game, game.menuItems(), { top: 80, gap: 34, w: 480, bottom: VH - 40 });
+    if (game.capture) {
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(0, 0, VW, VH);
+      panel(VW / 2 - 230, VH / 2 - 50, 460, 100);
+      const pl = game.capture.player.toUpperCase();
+      const act = t(game.capture.action === 'left' ? 'moveLeft' : game.capture.action === 'right' ? 'moveRight' : 'jump');
+      SG.text(ctx, `${pl} — ${act}`, VW / 2, VH / 2 - 16, { size: 20, weight: '900', color: game.capture.player === 'p1' ? '#ff7a70' : '#6fb8ff' });
+      SG.text(ctx, t('pressKey'), VW / 2, VH / 2 + 18, { size: 15, color: '#fff' });
+    }
+    hint(t('controlsHint'));
+  }
+
+  function keyLines() {
+    const k = UI.game.settings.keys;
+    const n = SG.keyName;
+    return {
+      p1: t('p1Line', n(k.p1.left), n(k.p1.right), n(k.p1.jump)),
+      p2: t('p2Line', n(k.p2.left), n(k.p2.right), n(k.p2.jump)),
+    };
+  }
+
+  function drawHowTo(game, time) {
+    const ctx = UI.ctx;
+    backdrop(game, time);
+    const pages = t('howPages');
+    const page = pages[game.howPage];
+    title(t('howTo'), 40, 30);
+    panel(90, 66, VW - 180, 280);
+    SG.text(ctx, page.title, VW / 2, 92, { size: 22, weight: '900', color: '#ffd23f' });
+    const kl = keyLines();
+    let y = 128;
+    const gap = page.lines.length > 6 ? 24 : game.howPage === 0 ? 25 : 30;
+    for (const line of page.lines) {
+      const str = line === '{p1}' ? kl.p1 : line === '{p2}' ? kl.p2 : line;
+      const col = line === '{p1}' ? '#ff9a90' : line === '{p2}' ? '#8cc8ff' : '#eef0ff';
+      SG.text(ctx, str, VW / 2, y, { size: 15, color: col, weight: line.startsWith('{') ? 'bold' : 'normal' });
+      y += gap;
+    }
+    if (game.howPage === 0) {
+      // little diagram: Ember stomping Tide
+      const v = UI.menuVis;
+      const a = { index: 0, x: 0, y: 0, w: 30, h: 40, vx: 0, vy: 9, onGround: false, facing: 1, invuln: 0 };
+      const b = { index: 1, x: 0, y: 0, w: 30, h: 40, vx: 0, vy: 0, onGround: true, facing: -1, invuln: 0 };
+      const ph = (time % 90) / 90;
+      const ay = 238 + Math.min(ph * 2, 1) * 18;
+      SG.drawFighter(ctx, b, v[1], VW / 2 - 15, 296);
+      SG.drawFighter(ctx, a, v[0], VW / 2 - 12, ay);
+      if (ph > 0.5 && ph < 0.75) {
+        ctx.fillStyle = '#ffe066';
+        SG.starPath(ctx, VW / 2 + 26, 293, 7, time * 0.1);
+        ctx.fill();
+        SG.text(ctx, '+1', VW / 2 + 50, 281, { size: 18, weight: '900', color: '#ffd23f', stroke: '#1a1030', strokeWidth: 4 });
+      }
+    }
+    hint(t('page', game.howPage + 1, pages.length));
+  }
+
+  function drawCredits(game, time) {
+    const ctx = UI.ctx;
+    backdrop(game, time);
+    panel(110, 40, VW - 220, 310);
+    const lines = t('creditsLines');
+    let y = 70;
+    lines.forEach((l, i) => {
+      SG.text(ctx, l, VW / 2, y, i === 0 ? { size: 28, weight: '900', color: '#ffd23f', stroke: '#1a1030', strokeWidth: 5 } : { size: 14, color: '#eef0ff', weight: 'normal' });
+      y += i === 0 ? 36 : 26;
+    });
+    hint('Enter / Esc');
+  }
+
+  function drawPause(game, time) {
+    const ctx = UI.ctx;
+    ctx.fillStyle = 'rgba(6,6,24,0.62)';
+    ctx.fillRect(0, 0, VW, VH);
+    title(t('paused'), 92, 44);
+    const net = game.net;
+    if (net && net.pausedBy >= 0) {
+      const who = net.pausedBy === net.slot ? t('you') : 'P' + (net.pausedBy + 1);
+      SG.text(ctx, t('pausedBy', who), VW / 2, 128, { size: 13, color: '#ffd23f' });
+    } else if (game.focusPaused) SG.text(ctx, t('focusLost'), VW / 2, 128, { size: 13, color: '#ffd23f' });
+    list(game, game.menuItems(), { top: 150, gap: 40, w: 340 });
+    hint(t('menuHint'));
+  }
+
+  function drawResults(game, time) {
+    const ctx = UI.ctx;
+    const s = game.session;
+    const w = s.world;
+    const win = w.matchWinner;
+    const k = Math.min(1, game.screenTicks / 20);
+    ctx.fillStyle = `rgba(6,6,24,${0.55 * k})`;
+    ctx.fillRect(0, 0, VW, VH);
+    const names = UI.names;
+    ctx.save();
+    ctx.translate(VW / 2, 62);
+    const sc = 0.7 + 0.3 * k + Math.sin(time * 0.08) * 0.02;
+    ctx.scale(sc, sc);
+    const header = s.online ? (win === s.online.slot ? t('youWin') : t('youLose')) : t('wins', names[win]);
+    SG.text(ctx, header, 0, 0, { size: 52, weight: '900', color: win === 0 ? '#ff6a5f' : '#4fa6ff', stroke: '#fff', strokeWidth: 8 });
+    ctx.restore();
+    // stats panel
+    const px = VW / 2 - 230;
+    panel(px, 100, 460, 136, 0.85);
+    const [a, b] = w.players;
+    const series = w.opts.bestOf > 1;
+    SG.drawEmblem(ctx, 0, VW / 2 - 140, 124, 8);
+    SG.drawEmblem(ctx, 1, VW / 2 + 140, 124, 8);
+    SG.text(ctx, names[0], VW / 2 - 140, 142, { size: 12, color: '#ffb0a8' });
+    SG.text(ctx, names[1], VW / 2 + 140, 142, { size: 12, color: '#a8d2ff' });
+    const big = series ? `${w.roundWins[0]} - ${w.roundWins[1]}` : `${a.score} - ${b.score}`;
+    SG.text(ctx, series ? t('rounds') : t('finalScore'), VW / 2, 116, { size: 11, color: 'rgba(255,255,255,0.7)', weight: 'normal' });
+    SG.text(ctx, big, VW / 2, 140, { size: 32, weight: '900', color: '#fff' });
+    const rows = [
+      [t('stomps'), w.stats.stomps[0], w.stats.stomps[1]],
+      [t('bestStreak'), w.stats.longestStreak[0], w.stats.longestStreak[1]],
+      [t('matchTime'), SG.fmtElapsed(w.totalTicks), null],
+    ];
+    rows.forEach((r, i) => {
+      const y = 172 + i * 20;
+      SG.text(ctx, r[0], VW / 2, y, { size: 12, color: 'rgba(255,255,255,0.7)', weight: 'normal' });
+      if (r[2] === null) SG.text(ctx, String(r[1]), VW / 2 + 140, y, { size: 13, color: '#fff' });
+      else {
+        SG.text(ctx, String(r[1]), VW / 2 - 140, y, { size: 13, color: '#fff' });
+        SG.text(ctx, String(r[2]), VW / 2 + 140, y, { size: 13, color: '#fff' });
+      }
+    });
+    // big winner (cheering) and loser (slumped) on either side
+    for (let i = 0; i < 2; i++) {
+      const v = UI.resultVis[i];
+      v.result = i === win ? 'win' : 'lose';
+      v.t = time;
+      const fx = i === 0 ? 92 : VW - 92;
+      const p = { index: i, x: 0, y: 0, w: 30, h: 40, vx: 0, vy: 0, onGround: true, facing: i === 0 ? 1 : -1, invuln: 0 };
+      ctx.save();
+      ctx.translate(fx, 300);
+      const s = i === win ? 2.2 : 1.6;
+      ctx.scale(s, s);
+      SG.drawFighter(ctx, p, v, -15, -40);
+      ctx.restore();
+      if (i === win) {
+        ctx.fillStyle = '#ffd23f';
+        SG.starPath(ctx, fx, 300 - 150 + Math.sin(time * 0.1) * 4, 14, time * 0.03);
+        ctx.fill();
+      }
+    }
+    if (game.screenTicks > 25) list(game, game.menuItems(), { top: 262, gap: 34, w: 300, bottom: VH - 30 });
+    else UI.rects = [];
+    hint(t('menuHint'));
+  }
+
+  // ---------------------------------------------------------------- online screens
+  function drawOnline(game, time) {
+    const ctx = UI.ctx;
+    backdrop(game, time);
+    title(t('onlineTitle'), 44, 32);
+    panel(110, 70, VW - 220, 128);
+    const lines = t('onlineInfo');
+    lines.forEach((l, i) => SG.text(ctx, l, VW / 2, 92 + i * 26, { size: 14, color: i === 1 ? '#ffe9a0' : '#eef0ff', weight: i === 1 ? 'bold' : 'normal' }));
+    if (!game.hooks.netConnect) SG.text(ctx, t('noServerInfo'), VW / 2, 214, { size: 12, color: '#ff9a90', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 3 });
+    else if (SG.deviceUrls && SG.deviceUrls.length) {
+      SG.text(ctx, t('otherDevices', SG.deviceUrls[0]), VW / 2, 213, { size: 14, weight: '900', color: '#8cc8ff', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 4 });
+    }
+    list(game, game.menuItems(), { top: 236, gap: 38, w: 340, bottom: VH - 30 });
+    hint(t('menuHint'));
+  }
+
+  function drawJoin(game, time) {
+    const ctx = UI.ctx;
+    backdrop(game, time);
+    title(t('joinRoom'), 40, 30);
+    SG.text(ctx, t('enterCode'), VW / 2, 74, { size: 15, color: '#eef0ff' });
+    // code boxes
+    const n = SG.NET.CODE_LEN;
+    for (let i = 0; i < n; i++) {
+      const bx = VW / 2 - (n * 52) / 2 + i * 52 + 4;
+      ctx.fillStyle = 'rgba(14,16,40,0.9)';
+      SG.roundRect(ctx, bx, 90, 44, 52, 10);
+      ctx.fill();
+      const caret = i === game.joinCode.length && Math.floor(time / 20) % 2 === 0;
+      ctx.strokeStyle = caret ? '#ffd23f' : 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const ch = game.joinCode[i];
+      if (ch) SG.text(ctx, ch, bx + 22, 117, { size: 30, weight: '900', color: '#fff' });
+    }
+    // keypad
+    UI.rects = [];
+    const kw = 74;
+    const kh = 44;
+    const kx = VW / 2 - (kw * 3 + 16) / 2;
+    const ky = 156;
+    SG.JOIN_KEYS.forEach((key, i) => {
+      const x = kx + (i % 3) * (kw + 8);
+      const y = ky + Math.floor(i / 3) * (kh + 6);
+      const active = i === game.joinCursor;
+      const ready = key === 'ok' && game.joinCode.length === n;
+      ctx.fillStyle = active ? 'rgba(255,210,63,0.9)' : ready ? 'rgba(60,170,90,0.9)' : 'rgba(14,16,40,0.85)';
+      SG.roundRect(ctx, x, y, kw, kh, 10);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const label = key === 'del' ? '⌫' : key === 'ok' ? 'OK' : key;
+      SG.text(ctx, label, x + kw / 2, y + kh / 2 + 1, { size: 20, weight: '900', color: active ? '#1a1030' : '#fff' });
+      UI.rects.push({ x, y, w: kw, h: kh, index: -1, action: 'key', value: key });
+    });
+    hint(t('joinHint'));
+  }
+
+  function drawLobby(game, time) {
+    const ctx = UI.ctx;
+    backdrop(game, time);
+    const net = game.net;
+    title(t('onlineTitle'), 40, 30);
+    panel(90, 64, VW - 180, 236);
+    if (!net || net.phase === 'connecting') {
+      const dots = '.'.repeat(1 + (Math.floor(time / 15) % 3));
+      const msg = net && net.intent === 'join' ? t('joining', net.code) : t('connecting');
+      SG.text(ctx, msg.replace('…', '') + dots, VW / 2, 180, { size: 20, weight: '900', color: '#fff' });
+    } else {
+      SG.text(ctx, t('roomCode'), VW / 2, 90, { size: 13, color: 'rgba(255,255,255,0.75)' });
+      SG.text(ctx, net.code.split('').join(' '), VW / 2, 128, { size: 50, weight: '900', color: '#ffd23f', stroke: '#1a1030', strokeWidth: 6 });
+      const pulse = 0.6 + 0.4 * Math.sin(time * 0.1);
+      ctx.globalAlpha = pulse;
+      SG.text(ctx, t('waitingOpp'), VW / 2, 170, { size: 16, color: '#fff' });
+      ctx.globalAlpha = 1;
+      if (net.urls.length) {
+        SG.text(ctx, t('shareHint'), VW / 2, 200, { size: 12, color: 'rgba(255,255,255,0.75)', weight: 'normal' });
+        net.urls.slice(0, 2).forEach((u, i) => SG.text(ctx, u, VW / 2, 222 + i * 22, { size: 16, color: '#8cc8ff' }));
+      }
+      SG.text(ctx, t('orJoin'), VW / 2, 282, { size: 12, color: 'rgba(255,255,255,0.7)', weight: 'normal' });
+    }
+    list(game, game.menuItems(), { top: 324, gap: 36, w: 260, bottom: VH - 30 });
+    hint(t('menuHint'));
+  }
+
+  // On-screen buttons for touch screens (drawn over the match).
+  UI.drawTouch = function (ctx, game, active) {
+    for (const b of game.touchButtons()) {
+      const on = active.has(b.code);
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      const tint = b.who === 0 ? '255,110,100' : b.who === 1 ? '90,160,255' : '255,255,255';
+      ctx.fillStyle = `rgba(${tint},${on ? 0.55 : 0.22})`;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(255,255,255,${on ? 0.9 : 0.5})`;
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      const s = b.r * 0.42;
+      ctx.beginPath();
+      if (b.icon === 'left') { ctx.moveTo(b.x - s, b.y); ctx.lineTo(b.x + s * 0.7, b.y - s); ctx.lineTo(b.x + s * 0.7, b.y + s); }
+      else if (b.icon === 'right') { ctx.moveTo(b.x + s, b.y); ctx.lineTo(b.x - s * 0.7, b.y - s); ctx.lineTo(b.x - s * 0.7, b.y + s); }
+      else if (b.icon === 'jump') { ctx.moveTo(b.x, b.y - s); ctx.lineTo(b.x + s, b.y + s * 0.7); ctx.lineTo(b.x - s, b.y + s * 0.7); }
+      else { ctx.rect(b.x - s * 0.6, b.y - s * 0.7, s * 0.4, s * 1.4); ctx.rect(b.x + s * 0.2, b.y - s * 0.7, s * 0.4, s * 1.4); }
+      ctx.closePath();
+      ctx.fill();
+    }
+  };
+
+  // Entry point used by main.js
+  UI.draw = function (ctx, game, time, inMatch) {
+    UI.ctx = ctx;
+    UI.game = game;
+    switch (game.top()) {
+      case 'title': drawTitle(game, time); break;
+      case 'main': drawMain(game, time); break;
+      case 'setup': drawSetup(game, time); break;
+      case 'stage': drawStageSelect(game, time); break;
+      case 'settings': if (inMatch) dim(ctx); drawSettings(game, time, inMatch); break;
+      case 'controls': if (inMatch) dim(ctx); drawControls(game, time, inMatch); break;
+      case 'howto': drawHowTo(game, time); break;
+      case 'credits': drawCredits(game, time); break;
+      case 'online': drawOnline(game, time); break;
+      case 'join': drawJoin(game, time); break;
+      case 'lobby': drawLobby(game, time); break;
+      case 'pause': drawPause(game, time); break;
+      case 'results': drawResults(game, time); break;
+      default: UI.rects = []; break;
+    }
+    if (game.toast) {
+      ctx.globalAlpha = Math.min(1, game.toast.ticks / 20);
+      panel(VW / 2 - 130, VH - 64, 260, 30, 0.9);
+      SG.text(ctx, game.toast.text, VW / 2, VH - 49, { size: 13, color: '#ffd23f' });
+      ctx.globalAlpha = 1;
+    }
+    // lightweight fade-in on every screen change
+    if (game.screenTicks < 10 && game.top() !== 'pause' && game.top() !== 'results') {
+      ctx.fillStyle = `rgba(0,0,0,${(1 - game.screenTicks / 10) * 0.6})`;
+      ctx.fillRect(0, 0, VW, VH);
+    }
+  };
+
+  function dim(ctx) {
+    ctx.fillStyle = 'rgba(6,6,24,0.75)';
+    ctx.fillRect(0, 0, VW, VH);
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : window);
+
+</script>
+<script>
+// ---- js/main.js
+// main.js — browser entry point: canvas/display, keyboard & mouse, storage, the fixed-timestep
+// loop, and wiring simulation events to effects. Physics always runs at exactly 60 ticks/s;
+// rendering runs every animation frame and interpolates between ticks.
+(function () {
+  'use strict';
+  const SG = window.SG;
+  const C = SG.C;
+  const VW = C.VIEW_W;
+  const VH = C.VIEW_H;
+  const STORAGE_KEY = 'stompduel.settings.v1';
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let backing = 1;
+
+  // ---------------------------------------------------------------- display
+  let scaleSetting = 'fit';
+  function fitCanvas() {
+    const pad = window.innerWidth < 900 ? 0 : 16; // phones: use the whole screen
+    const maxW = window.innerWidth - pad;
+    const maxH = window.innerHeight - pad;
+    const fit = Math.max(0.5, Math.min(maxW / VW, maxH / VH));
+    let s = scaleSetting === 'fit' || document.fullscreenElement ? fit : Math.min(scaleSetting, fit);
+    if (!isFinite(s) || s <= 0) s = 1;
+    const cssW = Math.round(VW * s);
+    const cssH = Math.round(VH * s);
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    backing = canvas.width / VW;
+  }
+  window.addEventListener('resize', fitCanvas);
+  document.addEventListener('fullscreenchange', fitCanvas);
+
+  function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+    } catch (e) {
+      /* fullscreen not allowed here */
+    }
+  }
+
+  // ---------------------------------------------------------------- storage
+  function load() {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function save(s) {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    } catch (e) {
+      /* private mode / blocked storage: settings just won't persist */
+    }
+  }
+
+  // ---------------------------------------------------------------- presentation state for a match
+  const pres = { vis: null, hud: null, cam: null, touching: false };
+  let game = null;
+
+  function names() {
+    const s = game.session;
+    if (s && s.online) return s.online.slot === 0 ? ['P1 · ' + SG.t('you'), 'P2'] : ['P1', 'P2 · ' + SG.t('you')];
+    if (!s || !s.ai) return ['P1', 'P2'];
+    return ['P1', s.ai.level === 0 ? 'DUMMY' : SG.t('cpu') + ' ' + s.ai.level];
+  }
+
+  function onMatchStart(session) {
+    SG.FX.clear();
+    pres.vis = [SG.createVis(0), SG.createVis(1)];
+    pres.hud = SG.createHud();
+    pres.cam = SG.createCamera(session.world.stage);
+    SG.snapCamera(pres.cam, session.world.players);
+    pres.touching = false;
+  }
+
+  function onWorldEvents(events, session) {
+    const w = session.world;
+    const FX = SG.FX;
+    const shakeOn = game.settings.shake;
+    let touching = false;
+    for (const ev of events) {
+      SG.hudEvent(pres.hud, ev);
+      switch (ev.type) {
+        case 'jump':
+        case 'land':
+          SG.visEvent(pres.vis[ev.who], ev, w.players[ev.who]);
+          break;
+        case 'bump':
+          touching = true;
+          if (!pres.touching) FX.sideDust(ev.x, ev.y, 0);
+          break;
+        case 'stomp': {
+          const top = w.players[ev.top];
+          const victim = w.players[ev.bottom];
+          victim.px = victim.x; // teleported: don't interpolate from the hit position
+          victim.py = victim.y;
+          SG.visEvent(pres.vis[ev.top], { type: 'stompTop' }, top);
+          SG.visEvent(pres.vis[ev.bottom], { type: 'respawn' }, victim);
+          FX.ghost(ev.x, ev.y, ev.bottom, ev.facing);
+          FX.stars(ev.x, ev.y, 6);
+          FX.burst(ev.x, ev.y, SG.PALETTE[ev.top].light, 14, 5);
+          FX.ring(ev.x, ev.y, '#fff', 46, 18);
+          FX.text(top.x + top.w / 2, top.y - 34, '+1', ev.top === 0 ? '#ff8a80' : '#82c4ff', 24);
+          FX.ring(victim.x + victim.w / 2, victim.y + victim.h / 2, SG.PALETTE[ev.bottom].light, 34, 22);
+          FX.dust(victim.x + victim.w / 2, victim.y + victim.h, 6, 12, SG.PALETTE[ev.bottom].light);
+          if (shakeOn) FX.shake = Math.max(FX.shake, 7);
+          FX.flash = 0.5;
+          FX.flashColor = '#ffffff';
+          break;
+        }
+        case 'go':
+          FX.flash = 0.25;
+          break;
+        case 'roundStart':
+          for (const p of w.players) { p.px = p.x; p.py = p.y; }
+          for (const p of w.stage.platforms) { p.px = p.x; p.py = p.y; }
+          SG.snapCamera(pres.cam, w.players);
+          break;
+        case 'suddenDeath':
+          FX.flash = 0.6;
+          FX.flashColor = '#ff3030';
+          if (shakeOn) FX.shake = Math.max(FX.shake, 5);
+          break;
+        case 'roundEnd': {
+          const winner = w.players[ev.winner];
+          pres.vis[ev.winner].result = 'win';
+          pres.vis[1 - ev.winner].result = 'lose';
+          if (ev.matchOver) {
+            FX.confetti(pres.cam.x, pres.cam.x + VW / pres.cam.zoom, pres.cam.top, 90);
+            if (shakeOn) FX.shake = Math.max(FX.shake, 10);
+          } else {
+            FX.burst(winner.x + 15, winner.y + 10, '#ffd23f', 20, 5);
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    }
+    pres.touching = touching;
+  }
+
+  function onTick(session) {
+    const w = session.world;
+    for (let i = 0; i < 2; i++) SG.tickVis(pres.vis[i], w.players[i], w.phase);
+    SG.FX.tick();
+    SG.hudTick(pres.hud);
+  }
+
+  // ---------------------------------------------------------------- online connection
+  // Online play needs the page to be served by server.js (same host); file:// has no server.
+  const onServer = location.protocol === 'http:' || location.protocol === 'https:';
+  function netConnect(onMessage, onClose) {
+    let sock;
+    try {
+      sock = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    } catch (e) {
+      return null;
+    }
+    const outbox = [];
+    let closed = false;
+    sock.onopen = () => { while (outbox.length) sock.send(outbox.shift()); };
+    sock.onmessage = (e) => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch (err) { return; }
+      onMessage(msg);
+    };
+    sock.onclose = () => { if (!closed) { closed = true; onClose(); } };
+    sock.onerror = () => { /* followed by onclose */ };
+    return {
+      send(obj) {
+        const text = JSON.stringify(obj);
+        if (sock.readyState === 1) sock.send(text);
+        else if (sock.readyState === 0) outbox.push(text);
+      },
+      close() {
+        closed = true;
+        try { sock.close(); } catch (e) { /* ignore */ }
+      },
+    };
+  }
+  // Addresses to show the other player. When this page was opened as "localhost", other devices
+  // need the computer's network address, which the server reports.
+  function baseUrls(ips, port) {
+    const local = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
+    if (!local) return [location.origin];
+    return ips.map((ip) => `http://${ip}:${port || location.port}`);
+  }
+  function shareUrls(code, ips, port) {
+    return baseUrls(ips, port).map((u) => u + '/?room=' + code);
+  }
+  // Address other devices should open (shown on the Online screen).
+  SG.deviceUrls = [];
+  if (onServer) {
+    fetch('/info', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => { if (info && Array.isArray(info.ips)) SG.deviceUrls = baseUrls(info.ips, info.port); })
+      .catch(() => { /* not served by server.js */ });
+  }
+
+  // ---------------------------------------------------------------- game
+  const defaultLang = (navigator.language || 'en').toLowerCase().startsWith('ja') ? 'ja' : 'en';
+  game = new SG.Game({
+    defaultLang,
+    sfx: (name, o) => SG.Audio.play(name, o),
+    music: (track) => SG.Audio.music(track),
+    duck: (on) => SG.Audio.duck(on),
+    applyAudio: (s) => SG.Audio.apply(s),
+    applyDisplay: (s) => {
+      scaleSetting = s.scale;
+      document.documentElement.lang = s.lang;
+      fitCanvas();
+    },
+    toggleFullscreen,
+    isFullscreen: () => !!document.fullscreenElement,
+    load,
+    save,
+    seed: () => (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) >>> 0,
+    onMatchStart,
+    onWorldEvents,
+    onTick,
+    netConnect: onServer && 'WebSocket' in window ? netConnect : null,
+    now: () => performance.now(),
+    shareUrls,
+  });
+  window.game = game; // handy for debugging from the console
+
+  // ---------------------------------------------------------------- input
+  const PASS_THROUGH = ['F5', 'F11', 'F12'];
+  window.addEventListener('keydown', (e) => {
+    SG.Audio.unlock();
+    if (e.ctrlKey || e.metaKey || e.altKey) return; // leave browser shortcuts alone
+    if (PASS_THROUGH.includes(e.code)) return;
+    e.preventDefault();
+    game.touchUI = false; // a keyboard is in use: hide the on-screen buttons
+    game.keyDown(e.code, e.repeat);
+  });
+  window.addEventListener('keyup', (e) => game.keyUp(e.code));
+  window.addEventListener('blur', () => game.blur());
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      game.blur();
+      SG.Audio.suspend();
+    } else SG.Audio.resume();
+  });
+
+  function toView(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: ((e.clientX - r.left) / r.width) * VW, y: ((e.clientY - r.top) / r.height) * VH };
+  }
+  function hit(pt) {
+    for (const r of SG.UI.rects) if (pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h) return r;
+    return null;
+  }
+  // Menus: mouse, pen and touch all select/activate rows.
+  function menuPointer(pt) {
+    const top = game.top();
+    const r = hit(pt);
+    if (top === 'title' || top === 'credits') return game.menuKey('Enter', false);
+    if (top === 'howto') return game.menuKey('ArrowRight', false);
+    if (!r) return;
+    if (r.action === 'prev') game.menuKey('ArrowLeft', false);
+    else if (r.action === 'next') game.menuKey('ArrowRight', false);
+    else if (r.action === 'start') game.menuKey('Enter', false);
+    else if (r.action === 'dec' || r.action === 'inc') game.pointerAdjust(r.index, r.action === 'dec' ? -1 : 1);
+    else if (r.action === 'key') game.joinKey(r.value);
+    else game.pointerSelect(r.index, true);
+  }
+
+  // Matches on a touch screen: every finger is mapped to an on-screen button; the set of pressed
+  // buttons is turned into virtual key presses ("Touch0Left", "Touch0Jump", …).
+  const fingers = new Map(); // pointerId → view point
+  let touchDown = new Set();
+  function syncTouch() {
+    const now = new Set();
+    if (game.top() === 'play') {
+      const buttons = game.touchButtons();
+      for (const pt of fingers.values()) {
+        const b = SG.touchHit(buttons, pt.x, pt.y);
+        if (b) now.add(b.code);
+      }
+    }
+    for (const c of touchDown) if (!now.has(c)) game.keyUp(c);
+    for (const c of now) if (!game.keys[c]) game.keyDown(c, false); // also re-presses after a pause
+    touchDown = now;
+  }
+  SG.touchState = () => touchDown;
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch') {
+      if (fingers.has(e.pointerId)) { fingers.set(e.pointerId, toView(e)); syncTouch(); }
+      return;
+    }
+    const r = hit(toView(e));
+    canvas.style.cursor = r || game.top() === 'title' ? 'pointer' : 'default';
+    if (r && r.index >= 0 && !r.action) game.pointerSelect(r.index, false);
+  });
+  canvas.addEventListener('pointerdown', (e) => {
+    SG.Audio.unlock();
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    const pt = toView(e);
+    if (e.pointerType === 'touch') {
+      game.touchUI = true;
+      if (game.top() === 'play') {
+        fingers.set(e.pointerId, pt);
+        try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* not capturable */ }
+        syncTouch();
+        return;
+      }
+    }
+    menuPointer(pt);
+  });
+  const fingerUp = (e) => {
+    if (!fingers.delete(e.pointerId)) return;
+    syncTouch();
+  };
+  canvas.addEventListener('pointerup', fingerUp);
+  canvas.addEventListener('pointercancel', fingerUp);
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // ---------------------------------------------------------------- gamepads
+  // First connected controller is P1, second is P2 (in 1P / online modes either controls you).
+  // Buttons become virtual keys "Pad<slot><Button>" so menus, pause and play reuse the keyboard paths.
+  const PAD_BUTTONS = ['Left', 'Right', 'Up', 'Down', 'A', 'B', 'Start'];
+  const padPrev = [{}, {}];
+  const padHeld = [{}, {}];
+  let padIds = [null, null];
+  function readPad(gp) {
+    const b = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed);
+    const ax = gp.axes[0] || 0;
+    const ay = gp.axes[1] || 0;
+    return {
+      Left: b(14) || ax < -0.5, Right: b(15) || ax > 0.5, Up: b(12) || ay < -0.5, Down: b(13) || ay > 0.5,
+      A: b(0), B: b(1), Start: b(9),
+    };
+  }
+  function pollPads() {
+    if (!navigator.getGamepads) return;
+    let list = [];
+    try { list = Array.from(navigator.getGamepads()).filter((p) => p && p.connected); } catch (e) { return; }
+    list.sort((a, b) => a.index - b.index);
+    for (let slot = 0; slot < 2; slot++) {
+      const gp = list[slot];
+      const id = gp ? gp.index : null;
+      if (id !== padIds[slot]) {
+        if (id !== null) game.toast = { text: SG.t('padOn', slot + 1), ticks: 120 };
+        else if (padIds[slot] !== null) game.toast = { text: SG.t('padOff', slot + 1), ticks: 120 };
+        padIds[slot] = id;
+      }
+      const now = gp ? readPad(gp) : {};
+      const prev = padPrev[slot];
+      const held = padHeld[slot];
+      for (const name of PAD_BUTTONS) {
+        const code = 'Pad' + slot + name;
+        if (now[name] && !prev[name]) {
+          SG.Audio.unlock();
+          game.touchUI = false;
+          game.keyDown(code, false);
+          held[name] = 0;
+        } else if (now[name]) {
+          // menu auto-repeat for directions (matches never see repeats)
+          held[name]++;
+          if (['Up', 'Down', 'Left', 'Right'].includes(name) && game.top() !== 'play' && held[name] > 22 && (held[name] - 22) % 6 === 0) {
+            game.keyDown(code, true);
+          }
+        } else if (prev[name]) game.keyUp(code);
+      }
+      padPrev[slot] = now;
+    }
+  }
+
+  // Opened from a shared room link: …/?room=1234
+  try {
+    const room = new URLSearchParams(location.search).get('room');
+    if (room && SG.validRoomCode(room)) {
+      game.autoJoin(room);
+      history.replaceState(null, '', location.pathname); // a reload should not re-join
+    }
+  } catch (e) {
+    /* no URL params */
+  }
+
+  // ---------------------------------------------------------------- loop
+  let last = performance.now();
+  let acc = 0;
+  let fps = 0;
+  let frames = 0;
+  let fpsTime = last;
+
+  function render(alpha, dt) {
+    ctx.setTransform(backing, 0, 0, backing, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    const s = game.session;
+    const top = game.top();
+    UI_NAMES();
+    if (s && game.inMatchStack()) {
+      const w = s.world;
+      const stepping = top === 'play' || top === 'results';
+      const a = stepping ? alpha : 1;
+      SG.updateCamera(pres.cam, w.players, stepping ? dt : 0);
+      SG.drawWorld(ctx, w, pres.cam, pres.vis, a, {
+        shake: game.settings.shake, labels: game.settings.labels, names: SG.UI.names, debug: game.debug, uiTicks: game.uiTicks,
+      });
+      SG.drawHud(ctx, w, pres.hud, SG.UI.names, game.uiTicks);
+      if (s.online) {
+        const rtt = game.net && game.net.rtt >= 0 ? `  ${Math.round(game.net.rtt)} ms` : '';
+        const y = s.world.opts.bestOf > 1 ? 78 : 64; // below the round pips
+        SG.text(ctx, SG.t('onlineTag') + rtt, VW / 2, y, { size: 9, weight: 'bold', color: 'rgba(170,255,200,0.95)', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 3 });
+      }
+      if (top === 'play' && game.touchUI) SG.UI.drawTouch(ctx, game, touchDown);
+      if (top !== 'play') SG.UI.draw(ctx, game, game.uiTicks, true);
+      else SG.UI.rects = [];
+    } else {
+      SG.UI.draw(ctx, game, game.uiTicks, false);
+    }
+    if (game.debug) SG.drawDebug(ctx, game, fps);
+  }
+  function UI_NAMES() { SG.UI.names = names(); }
+
+  function frame(now) {
+    const dt = Math.min(now - last, 250); // clamp after tab switches (no catch-up spiral)
+    last = now;
+    acc += dt;
+    while (acc >= C.TICK_MS) {
+      pollPads();
+      if (fingers.size || touchDown.size) syncTouch();
+      game.tick();
+      if (!game.inMatchStack()) SG.UI.tick();
+      acc -= C.TICK_MS;
+    }
+    frames++;
+    if (now - fpsTime >= 1000) {
+      fps = frames;
+      frames = 0;
+      fpsTime = now;
+    }
+    render(acc / C.TICK_MS, dt / 1000);
+    requestAnimationFrame(frame);
+  }
+
+  fitCanvas();
+  canvas.focus();
+  requestAnimationFrame(frame);
+})();
+
+</script>
+<script>
+  // If the js/ folder is missing (e.g. index.html opened alone or from inside a ZIP), explain instead of a blank page.
+  if (!(window.SG && window.SG.Game && window.game instanceof window.SG.Game)) {
+    document.body.innerHTML = '<div style="color:#fff;font:16px/1.6 sans-serif;max-width:640px;padding:24px">' +
+      '<h2>Stomp Duel could not load its files</h2>' +
+      '<p>The <b>js</b> folder next to index.html is missing. If you downloaded a ZIP, right-click it → <b>Extract All</b>, ' +
+      'then open index.html from the extracted folder. Or open <b>StompDuel.html</b>, which works on its own.</p>' +
+      '<p>ゲームのファイルを読み込めませんでした。ZIP の場合は「すべて展開」してから index.html を開くか、' +
+      '単体で動く <b>StompDuel.html</b> を開いてください。</p></div>';
+  }
+</script>
+</body>
+</html>

@@ -828,3 +828,9 @@ Gamepads / controllers, Touch controls, and "Something else" (no details given).
 ```text
 did you push into the git also push all the propt to git
 ```
+
+## 6. Bug report: launching and other devices (2026-11-27)
+
+```text
+when i download the game and double click the index.html it does't open and when i chilk local hoast link on other deviece it doest give access
+```

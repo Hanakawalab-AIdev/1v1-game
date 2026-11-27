@@ -11,8 +11,12 @@ target score wins. Built with plain HTML5 Canvas + Web Audio: no installs, no de
   when you download just that file.
 - `index.html` works too, but only together with its `js` folder. If you downloaded the ZIP from GitHub,
   right-click it → **Extract All** first (opening it from inside the ZIP shows an error page).
-- **With online play:** install [Node.js](https://nodejs.org) 18+ and run `node server.js` in this folder,
-  then open http://localhost:8123. No `npm install` needed: the server uses no packages.
+- **With online play:** double-click **`Start Online Server.cmd`** (Windows) or run `./start-online-server.sh`
+  (macOS / Linux). It starts the game server and opens the game in your browser; keep its window open while
+  playing. Needs [Node.js](https://nodejs.org) 18+ (the launcher tells you if it's missing). No `npm install`
+  needed. Same thing by hand: `node server.js`, then open http://localhost:8123.
+- Opening `StompDuel.html` / `index.html` by double-click plays everything **except** online: a page opened as a
+  file can't host or join rooms.
 
 Sound starts after your first key press, click or tap (a browser rule).
 
@@ -26,8 +30,9 @@ A or B jumps, Start pauses. In menus: D-pad moves, A confirms, B goes back.
 (one set for 1P / online, two sets when two people share one tablet). Turn the phone sideways.
 
 **Online / same Wi-Fi (each player on their own device):**
-1. On one computer run `node server.js`. It prints addresses such as `http://192.168.1.20:8123`.
-   On Windows, allow Node.js through the firewall on *private* networks when asked.
+1. On one computer double-click `Start Online Server.cmd` (or run `node server.js`). The game opens there, and the
+   server window prints the address for other devices, such as `http://192.168.1.20:8123` (the game's Online
+   screen shows it too). On Windows, allow Node.js through the firewall when asked.
 2. Player 1 opens that address, chooses **Online / Wi-Fi → Create Room**, picks rules and a stage, and gets a 4-digit code
    (plus a link with the code in it).
 3. Player 2 opens the link on their device (PC, tablet or phone), or opens the address and chooses
@@ -113,6 +118,7 @@ After changing anything in `index.html` or `js/`, rebuild the single-file versio
 StompDuel.html    the whole game in one file (generated)
 index.html        page + script order
 tools/            build-standalone.js (makes StompDuel.html)
+Start Online Server.cmd / start-online-server.sh   start the server + open the game
 server.js         game server: serves the game + online rooms (Node.js, no packages)
 server/ws.js      minimal WebSocket implementation
 server/rooms.js   rooms, room codes, the authoritative 60 Hz match clock
@@ -138,6 +144,7 @@ serve.ps1         optional local web server (local play only, no online)
 
 1台のキーボードで2人が遊ぶ 1v1 対戦アクション。相手の頭を踏むと1点、先に目標点（初期設定5点）を取ったほうが勝ち。
 
+- **オンライン対戦:** `Start Online Server.cmd` をダブルクリック（Node.js が必要）→ ゲームが開きます。ファイルを直接開いた場合はオンライン以外が遊べます
 - **起動:** `StompDuel.html` をダブルクリック（1ファイルで動きます）。`index.html` は `js` フォルダと一緒に必要です（ZIP は「すべて展開」してから）
 - **ほかの端末がつながらない時:** ほかの端末では `localhost` ではなく、`node server.js` が表示する `http://192.168.…:8123` を開く。
   同じ Wi-Fi に接続し、Windows のファイアウォールで Node.js を許可。ゲスト・学校の Wi-Fi で無理な場合はスマホのテザリングを使う

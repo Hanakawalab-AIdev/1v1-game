@@ -227,11 +227,11 @@
       joinRoom: 'Join Room',
       onlineInfo: [
         'Each player uses their own device (PC, tablet or phone).',
-        'One computer runs the game server:  node server.js',
+        'One computer starts the server:  "Start Online Server"',
         'Everyone opens the address it prints, in a browser.',
         'Create a room on one device, join with its code on the other.',
       ],
-      noServerInfo: 'This page was not opened from the game server, so online play is off.',
+      noServerInfo: ['Online is off: the game was opened as a file.', 'To play online, double-click  "Start Online Server"  in the game folder.'],
       noServer: 'Online needs the game server',
       otherDevices: 'Other devices open:  {0}',
       enterCode: 'Enter the 4-digit room code',
@@ -385,11 +385,11 @@
       joinRoom: 'ルームに参加',
       onlineInfo: [
         'それぞれ自分の端末（PC・タブレット・スマホ）で遊びます。',
-        '1台のPCでゲームサーバーを起動： node server.js',
+        '1台のPCで「Start Online Server」をダブルクリック',
         '表示されたアドレスを各端末のブラウザで開きます。',
         '片方でルームを作り、もう片方はコードを入力して参加。',
       ],
-      noServerInfo: 'このページはゲームサーバーから開かれていないため、オンライン対戦は使えません。',
+      noServerInfo: ['ファイルから開いたため、オンライン対戦はオフです。', 'ゲームフォルダの「Start Online Server」をダブルクリックしてください。'],
       noServer: 'オンラインにはサーバーが必要です',
       otherDevices: 'ほかの端末で開く：  {0}',
       enterCode: '4けたのルームコードを入力',
@@ -1423,6 +1423,7 @@
     g.joinCode = '';
     g.joinCursor = 0;
     g.touchUI = false; // set by main.js once a touch screen is used
+    g.serverHint = 0; // ticks left to flash the "start the server" instructions
     h.applyAudio(g.settings);
     h.applyDisplay(g.settings);
     g.updateMusic();
@@ -1804,6 +1805,7 @@
     this.uiTicks++;
     this.screenTicks++;
     if (this.toast && --this.toast.ticks <= 0) this.toast = null;
+    if (this.serverHint > 0) this.serverHint--;
     const top = this.top();
     if (this.net && this.uiTicks % SG.NET.PING_EVERY === 0) this.net.conn.send({ t: 'ping', c: this.hooks.now() });
     if (this.session && this.session.online) this.tickOnline();
@@ -1814,7 +1816,9 @@
   // ---------------------------------------------------------------- online (see js/net.js)
   P.requireServer = function () {
     if (this.hooks.netConnect) return true;
-    this.toast = { text: SG.t('noServer'), ticks: 150 };
+    // On the Online screen the instructions are already shown: flash them instead of covering the menu.
+    if (this.top() === 'online') this.serverHint = 48;
+    else this.toast = { text: SG.t('noServer'), ticks: 150 };
     this.hooks.sfx('back');
     return false;
   };
@@ -4155,8 +4159,17 @@
     panel(110, 70, VW - 220, 128);
     const lines = t('onlineInfo');
     lines.forEach((l, i) => SG.text(ctx, l, VW / 2, 92 + i * 26, { size: 14, color: i === 1 ? '#ffe9a0' : '#eef0ff', weight: i === 1 ? 'bold' : 'normal' }));
-    if (!game.hooks.netConnect) SG.text(ctx, t('noServerInfo'), VW / 2, 214, { size: 12, color: '#ff9a90', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 3 });
-    else if (SG.deviceUrls && SG.deviceUrls.length) {
+    if (!game.hooks.netConnect) {
+      // opened as a file: say exactly how to turn online on (flashes when Create/Join is pressed)
+      const flash = game.serverHint > 0 && Math.floor(game.serverHint / 6) % 2 === 0;
+      t('noServerInfo').forEach((l, i) => SG.text(ctx, l, VW / 2, 213 + i * 21, {
+        size: i === 0 ? 13 : 14, weight: i === 0 ? 'normal' : '900',
+        color: i === 0 ? '#ff9a90' : flash ? '#ffffff' : '#ffd23f', stroke: 'rgba(0,0,0,0.75)', strokeWidth: 4,
+      }));
+      list(game, game.menuItems(), { top: 266, gap: 33, w: 340, bottom: VH - 30 });
+      hint(t('menuHint'));
+      return;
+    } else if (SG.deviceUrls && SG.deviceUrls.length) {
       SG.text(ctx, t('otherDevices', SG.deviceUrls[0]), VW / 2, 213, { size: 14, weight: '900', color: '#8cc8ff', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 4 });
     }
     list(game, game.menuItems(), { top: 236, gap: 38, w: 340, bottom: VH - 30 });

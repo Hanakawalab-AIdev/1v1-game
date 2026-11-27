@@ -380,8 +380,17 @@
     panel(110, 70, VW - 220, 128);
     const lines = t('onlineInfo');
     lines.forEach((l, i) => SG.text(ctx, l, VW / 2, 92 + i * 26, { size: 14, color: i === 1 ? '#ffe9a0' : '#eef0ff', weight: i === 1 ? 'bold' : 'normal' }));
-    if (!game.hooks.netConnect) SG.text(ctx, t('noServerInfo'), VW / 2, 214, { size: 12, color: '#ff9a90', stroke: 'rgba(0,0,0,0.6)', strokeWidth: 3 });
-    else if (SG.deviceUrls && SG.deviceUrls.length) {
+    if (!game.hooks.netConnect) {
+      // opened as a file: say exactly how to turn online on (flashes when Create/Join is pressed)
+      const flash = game.serverHint > 0 && Math.floor(game.serverHint / 6) % 2 === 0;
+      t('noServerInfo').forEach((l, i) => SG.text(ctx, l, VW / 2, 213 + i * 21, {
+        size: i === 0 ? 13 : 14, weight: i === 0 ? 'normal' : '900',
+        color: i === 0 ? '#ff9a90' : flash ? '#ffffff' : '#ffd23f', stroke: 'rgba(0,0,0,0.75)', strokeWidth: 4,
+      }));
+      list(game, game.menuItems(), { top: 266, gap: 33, w: 340, bottom: VH - 30 });
+      hint(t('menuHint'));
+      return;
+    } else if (SG.deviceUrls && SG.deviceUrls.length) {
       SG.text(ctx, t('otherDevices', SG.deviceUrls[0]), VW / 2, 213, { size: 14, weight: '900', color: '#8cc8ff', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 4 });
     }
     list(game, game.menuItems(), { top: 236, gap: 38, w: 340, bottom: VH - 30 });

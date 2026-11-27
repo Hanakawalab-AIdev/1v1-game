@@ -834,3 +834,13 @@ did you push into the git also push all the propt to git
 ```text
 when i download the game and double click the index.html it does't open and when i chilk local hoast link on other deviece it doest give access
 ```
+
+## 7. Merge (2026-11-27)
+
+```text
+Merge into main
+```
+
+## 8. Screenshot of the Online screen opened as a file (2026-11-27)
+
+(Image only: the Online Play screen saying "This page was not opened from the game server, so online play is off".)

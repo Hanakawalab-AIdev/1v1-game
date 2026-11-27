@@ -122,6 +122,7 @@
     g.joinCode = '';
     g.joinCursor = 0;
     g.touchUI = false; // set by main.js once a touch screen is used
+    g.serverHint = 0; // ticks left to flash the "start the server" instructions
     h.applyAudio(g.settings);
     h.applyDisplay(g.settings);
     g.updateMusic();
@@ -503,6 +504,7 @@
     this.uiTicks++;
     this.screenTicks++;
     if (this.toast && --this.toast.ticks <= 0) this.toast = null;
+    if (this.serverHint > 0) this.serverHint--;
     const top = this.top();
     if (this.net && this.uiTicks % SG.NET.PING_EVERY === 0) this.net.conn.send({ t: 'ping', c: this.hooks.now() });
     if (this.session && this.session.online) this.tickOnline();
@@ -513,7 +515,9 @@
   // ---------------------------------------------------------------- online (see js/net.js)
   P.requireServer = function () {
     if (this.hooks.netConnect) return true;
-    this.toast = { text: SG.t('noServer'), ticks: 150 };
+    // On the Online screen the instructions are already shown: flash them instead of covering the menu.
+    if (this.top() === 'online') this.serverHint = 48;
+    else this.toast = { text: SG.t('noServer'), ticks: 150 };
     this.hooks.sfx('back');
     return false;
   };

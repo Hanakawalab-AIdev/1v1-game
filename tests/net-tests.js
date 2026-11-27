@@ -310,7 +310,7 @@ module.exports = function (SG, { test, assert, eq }) {
     press(g, 'Enter');
     press(g, 'Enter'); // Create Room
     eq(g.top(), 'online');
-    eq(g.toast.text, SG.t('noServer'));
+    assert(g.serverHint > 0 && !g.toast, 'instructions flash instead of a toast covering the menu');
     // cancel from the lobby closes the room
     const net2 = makeNet(10);
     const H = hostRoom(net2);

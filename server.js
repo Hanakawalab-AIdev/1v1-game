@@ -121,9 +121,27 @@ const t0 = process.hrtime.bigint();
 function now() {
   return Number(process.hrtime.bigint() - t0) / 1e6;
 }
-setInterval(() => rooms.update(now()), 4);
+const clock = setInterval(() => rooms.update(now()), 4);
+
+// `node server.js --open` (used by the "Start Online Server" launchers) opens the game in the browser.
+const OPEN = process.argv.includes('--open');
+function openBrowser(url) {
+  const { exec } = require('child_process');
+  const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
+  exec(cmd, () => {});
+}
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.log(`The game server is already running on port ${PORT} (another window?).`);
+    if (OPEN) openBrowser(`http://localhost:${PORT}`);
+  } else console.log('Could not start the server: ' + err.message);
+  clearInterval(clock);
+  process.exitCode = 1;
+});
 
 server.listen(PORT, HOST, () => {
+  if (OPEN) openBrowser(`http://localhost:${PORT}`);
   console.log('Stomp Duel server running.');
   console.log(`  On this computer open:     http://localhost:${PORT}`);
   if (ips.length) {

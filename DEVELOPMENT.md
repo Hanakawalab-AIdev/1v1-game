@@ -164,3 +164,5 @@ window (the QA pane was hidden, so frames were throttled and ticks were driven m
   the Online screen shows the Wi-Fi address (`/info`), skips 169.254.x adapters; README troubleshooting.
   Verified with headless Edge from disk (lone index.html → message; StompDuel.html alone → game) and
   `/info` via the Wi-Fi address on this PC. Not verified: an actual second device on this Wi-Fi.
+- 2026-11-27: Online from a double-clicked file was confusing → added `Start Online Server.cmd` /`n  `start-online-server.sh` (`node server.js --open` opens the browser; detects a server already running),
+  Online screen now gives the exact step and flashes it instead of a toast that covered the menu.

@@ -844,3 +844,9 @@ Merge into main
 ## 8. Screenshot of the Online screen opened as a file (2026-11-27)
 
 (Image only: the Online Play screen saying "This page was not opened from the game server, so online play is off".)
+
+## 9. Copy link (2026-11-27)
+
+```text
+give the option of copying link while creating the room
+```

@@ -96,7 +96,7 @@
         load: () => null, save: noop,
         onMatchStart: noop, onWorldEvents: noop, onTick: noop,
         // Online: netConnect(onMessage, onClose) → { send(obj), close() } or null when no server is reachable.
-        netConnect: null, now: () => 0, shareUrls: () => [],
+        netConnect: null, now: () => 0, shareUrls: () => [], copyText: () => false,
       },
       hooks || {}
     );
@@ -307,8 +307,12 @@
           { id: 'join', label: () => t('joinRoom'), ok: () => { if (g.requireServer()) { g.joinCode = ''; g.joinCursor = 0; g.go('join'); } } },
           { id: 'back', label: () => t('back'), ok: () => g.back() },
         ];
-      case 'lobby':
-        return [{ id: 'cancel', label: () => t('cancel'), ok: () => g.cancelLobby() }];
+      case 'lobby': {
+        const items = [];
+        if (g.net && g.net.phase === 'lobby' && g.net.urls.length) items.push({ id: 'copy', label: () => (g.net.copyMsg ? '✓ ' + t(g.net.copyMsg.key) : t('copyLink')), ok: () => g.copyInviteLink() });
+        items.push({ id: 'cancel', label: () => t('cancel'), ok: () => g.cancelLobby() });
+        return items;
+      }
       case 'pause':
         if (g.session && g.session.online) {
           return [
@@ -505,6 +509,7 @@
     this.screenTicks++;
     if (this.toast && --this.toast.ticks <= 0) this.toast = null;
     if (this.serverHint > 0) this.serverHint--;
+    if (this.net && this.net.copyMsg && --this.net.copyMsg.ticks <= 0) this.net.copyMsg = null;
     const top = this.top();
     if (this.net && this.uiTicks % SG.NET.PING_EVERY === 0) this.net.conn.send({ t: 'ping', c: this.hooks.now() });
     if (this.session && this.session.online) this.tickOnline();
@@ -575,6 +580,15 @@
     } catch (e) {
       /* already closed */
     }
+  };
+
+  // Copy the room's invite link (…/?room=1234) so it can be pasted into a chat app.
+  P.copyInviteLink = function () {
+    const n = this.net;
+    if (!n || !n.urls.length) return false;
+    const ok = !!this.hooks.copyText(n.urls[0]);
+    n.copyMsg = { key: ok ? 'linkCopied' : 'copyFailed', ticks: 150 }; // shown on the button itself
+    return ok;
   };
 
   P.cancelLobby = function () {

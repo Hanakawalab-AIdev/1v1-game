@@ -243,6 +243,9 @@
       shareHint: 'On the other device, open this address:',
       orJoin: '…or choose Online → Join Room and enter the code.',
       cancel: 'Cancel',
+      copyLink: 'Copy Invite Link',
+      linkCopied: 'Invite link copied!',
+      copyFailed: 'Could not copy: share the code',
       leaveMatch: 'Leave Match',
       pausedBy: 'Paused by {0}',
       oppLeft: 'Your opponent left',
@@ -401,6 +404,9 @@
       shareHint: 'もう1台の端末でこのアドレスを開く：',
       orJoin: '…または「オンライン → ルームに参加」でコードを入力。',
       cancel: 'キャンセル',
+      copyLink: '招待リンクをコピー',
+      linkCopied: '招待リンクをコピーしました',
+      copyFailed: 'コピーできませんでした',
       leaveMatch: '試合をぬける',
       pausedBy: '{0} がポーズしました',
       oppLeft: '相手が退出しました',
@@ -1397,7 +1403,7 @@
         load: () => null, save: noop,
         onMatchStart: noop, onWorldEvents: noop, onTick: noop,
         // Online: netConnect(onMessage, onClose) → { send(obj), close() } or null when no server is reachable.
-        netConnect: null, now: () => 0, shareUrls: () => [],
+        netConnect: null, now: () => 0, shareUrls: () => [], copyText: () => false,
       },
       hooks || {}
     );
@@ -1608,8 +1614,12 @@
           { id: 'join', label: () => t('joinRoom'), ok: () => { if (g.requireServer()) { g.joinCode = ''; g.joinCursor = 0; g.go('join'); } } },
           { id: 'back', label: () => t('back'), ok: () => g.back() },
         ];
-      case 'lobby':
-        return [{ id: 'cancel', label: () => t('cancel'), ok: () => g.cancelLobby() }];
+      case 'lobby': {
+        const items = [];
+        if (g.net && g.net.phase === 'lobby' && g.net.urls.length) items.push({ id: 'copy', label: () => (g.net.copyMsg ? '✓ ' + t(g.net.copyMsg.key) : t('copyLink')), ok: () => g.copyInviteLink() });
+        items.push({ id: 'cancel', label: () => t('cancel'), ok: () => g.cancelLobby() });
+        return items;
+      }
       case 'pause':
         if (g.session && g.session.online) {
           return [
@@ -1806,6 +1816,7 @@
     this.screenTicks++;
     if (this.toast && --this.toast.ticks <= 0) this.toast = null;
     if (this.serverHint > 0) this.serverHint--;
+    if (this.net && this.net.copyMsg && --this.net.copyMsg.ticks <= 0) this.net.copyMsg = null;
     const top = this.top();
     if (this.net && this.uiTicks % SG.NET.PING_EVERY === 0) this.net.conn.send({ t: 'ping', c: this.hooks.now() });
     if (this.session && this.session.online) this.tickOnline();
@@ -1876,6 +1887,15 @@
     } catch (e) {
       /* already closed */
     }
+  };
+
+  // Copy the room's invite link (…/?room=1234) so it can be pasted into a chat app.
+  P.copyInviteLink = function () {
+    const n = this.net;
+    if (!n || !n.urls.length) return false;
+    const ok = !!this.hooks.copyText(n.urls[0]);
+    n.copyMsg = { key: ok ? 'linkCopied' : 'copyFailed', ticks: 150 }; // shown on the button itself
+    return ok;
   };
 
   P.cancelLobby = function () {
@@ -4224,7 +4244,7 @@
     backdrop(game, time);
     const net = game.net;
     title(t('onlineTitle'), 40, 30);
-    panel(90, 64, VW - 180, 236);
+    panel(90, 64, VW - 180, 222);
     if (!net || net.phase === 'connecting') {
       const dots = '.'.repeat(1 + (Math.floor(time / 15) % 3));
       const msg = net && net.intent === 'join' ? t('joining', net.code) : t('connecting');
@@ -4240,9 +4260,9 @@
         SG.text(ctx, t('shareHint'), VW / 2, 200, { size: 12, color: 'rgba(255,255,255,0.75)', weight: 'normal' });
         net.urls.slice(0, 2).forEach((u, i) => SG.text(ctx, u, VW / 2, 222 + i * 22, { size: 16, color: '#8cc8ff' }));
       }
-      SG.text(ctx, t('orJoin'), VW / 2, 282, { size: 12, color: 'rgba(255,255,255,0.7)', weight: 'normal' });
+      SG.text(ctx, t('orJoin'), VW / 2, 270, { size: 12, color: 'rgba(255,255,255,0.7)', weight: 'normal' });
     }
-    list(game, game.menuItems(), { top: 324, gap: 36, w: 260, bottom: VH - 30 });
+    list(game, game.menuItems(), { top: 306, gap: 30, w: 300, bottom: VH - 30 });
     hint(t('menuHint'));
   }
 
@@ -4510,6 +4530,31 @@
   function shareUrls(code, ips, port) {
     return baseUrls(ips, port).map((u) => u + '/?room=' + code);
   }
+  // Clipboard. Runs inside the key/tap handler (a user gesture). execCommand works on plain-http LAN
+  // addresses too, where navigator.clipboard is unavailable (it needs a secure context).
+  function copyText(text) {
+    let ok = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:0;top:0;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      ok = document.execCommand('copy');
+      ta.remove();
+    } catch (e) {
+      ok = false;
+    }
+    if (!ok && navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).catch(() => {});
+      ok = true;
+    }
+    canvas.focus();
+    return ok;
+  }
+
   // Address other devices should open (shown on the Online screen).
   SG.deviceUrls = [];
   if (onServer) {
@@ -4543,6 +4588,7 @@
     netConnect: onServer && 'WebSocket' in window ? netConnect : null,
     now: () => performance.now(),
     shareUrls,
+    copyText,
   });
   window.game = game; // handy for debugging from the console
 

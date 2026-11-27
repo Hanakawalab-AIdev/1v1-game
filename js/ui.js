@@ -445,7 +445,7 @@
     backdrop(game, time);
     const net = game.net;
     title(t('onlineTitle'), 40, 30);
-    panel(90, 64, VW - 180, 236);
+    panel(90, 64, VW - 180, 222);
     if (!net || net.phase === 'connecting') {
       const dots = '.'.repeat(1 + (Math.floor(time / 15) % 3));
       const msg = net && net.intent === 'join' ? t('joining', net.code) : t('connecting');
@@ -461,9 +461,9 @@
         SG.text(ctx, t('shareHint'), VW / 2, 200, { size: 12, color: 'rgba(255,255,255,0.75)', weight: 'normal' });
         net.urls.slice(0, 2).forEach((u, i) => SG.text(ctx, u, VW / 2, 222 + i * 22, { size: 16, color: '#8cc8ff' }));
       }
-      SG.text(ctx, t('orJoin'), VW / 2, 282, { size: 12, color: 'rgba(255,255,255,0.7)', weight: 'normal' });
+      SG.text(ctx, t('orJoin'), VW / 2, 270, { size: 12, color: 'rgba(255,255,255,0.7)', weight: 'normal' });
     }
-    list(game, game.menuItems(), { top: 324, gap: 36, w: 260, bottom: VH - 30 });
+    list(game, game.menuItems(), { top: 306, gap: 30, w: 300, bottom: VH - 30 });
     hint(t('menuHint'));
   }
 

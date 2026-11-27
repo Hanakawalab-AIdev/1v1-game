@@ -166,3 +166,6 @@ window (the QA pane was hidden, so frames were throttled and ticks were driven m
   `/info` via the Wi-Fi address on this PC. Not verified: an actual second device on this Wi-Fi.
 - 2026-11-27: Online from a double-clicked file was confusing → added `Start Online Server.cmd` /`n  `start-online-server.sh` (`node server.js --open` opens the browser; detects a server already running),
   Online screen now gives the exact step and flashes it instead of a toast that covered the menu.
+- 2026-11-27: Room screen: "Copy Invite Link" button (first item) copies `http://<wifi-ip>:8123/?room=CODE`;
+  confirmation shows on the button. Works on plain-http LAN addresses (execCommand fallback). Verified with a
+  real click in the browser: the Windows clipboard held the link. 71 tests.

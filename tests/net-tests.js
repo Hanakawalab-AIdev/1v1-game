@@ -320,6 +320,28 @@ module.exports = function (SG, { test, assert, eq }) {
     eq(net2.rooms.rooms.size, 0);
   });
 
+  test('online: room screen offers Copy Invite Link (copies the share link)', () => {
+    const net = makeNet(10);
+    const H = hostRoom(net);
+    const copied = [];
+    H.g.hooks.copyText = (text) => { copied.push(text); return true; };
+    const items = H.g.menuItems();
+    eq(items.map((it) => it.id).join(), 'copy,cancel');
+    eq(H.g.cursor.lobby, 0, 'Copy is selected first');
+    press(H.g, 'Enter');
+    eq(copied[0], `http://192.168.0.10:8123/?room=${H.g.net.code}`);
+    eq(H.g.menuItems()[0].label(), '✓ ' + SG.t('linkCopied'), 'button confirms');
+    eq(H.g.top(), 'lobby', 'still waiting in the room');
+    run(net, [H.g], 160);
+    eq(H.g.menuItems()[0].label(), SG.t('copyLink'), 'label resets');
+    H.g.hooks.copyText = () => false;
+    H.g.copyInviteLink();
+    eq(H.g.menuItems()[0].label(), '✓ ' + SG.t('copyFailed'));
+    // a guest who is still joining has nothing to copy
+    const J = joinRoom(makeNet(10), '0000');
+    eq(J.g.menuItems().map((it) => it.id).join(), 'cancel');
+  });
+
   test('online: server rejects junk messages and floods', () => {
     const rooms = new Rooms({ random: SG.makeRng(5) });
     const sent = [];

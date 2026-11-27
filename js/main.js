@@ -196,6 +196,31 @@
   function shareUrls(code, ips, port) {
     return baseUrls(ips, port).map((u) => u + '/?room=' + code);
   }
+  // Clipboard. Runs inside the key/tap handler (a user gesture). execCommand works on plain-http LAN
+  // addresses too, where navigator.clipboard is unavailable (it needs a secure context).
+  function copyText(text) {
+    let ok = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;left:0;top:0;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      ok = document.execCommand('copy');
+      ta.remove();
+    } catch (e) {
+      ok = false;
+    }
+    if (!ok && navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).catch(() => {});
+      ok = true;
+    }
+    canvas.focus();
+    return ok;
+  }
+
   // Address other devices should open (shown on the Online screen).
   SG.deviceUrls = [];
   if (onServer) {
@@ -229,6 +254,7 @@
     netConnect: onServer && 'WebSocket' in window ? netConnect : null,
     now: () => performance.now(),
     shareUrls,
+    copyText,
   });
   window.game = game; // handy for debugging from the console
 

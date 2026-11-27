@@ -34,7 +34,7 @@ A or B jumps, Start pauses. In menus: D-pad moves, A confirms, B goes back.
    server window prints the address for other devices, such as `http://192.168.1.20:8123` (the game's Online
    screen shows it too). On Windows, allow Node.js through the firewall when asked.
 2. Player 1 opens that address, chooses **Online / Wi-Fi → Create Room**, picks rules and a stage, and gets a 4-digit code
-   (plus a link with the code in it).
+   plus an invite link: press **Copy Invite Link** and paste it into a chat to send it.
 3. Player 2 opens the link on their device (PC, tablet or phone), or opens the address and chooses
    **Online / Wi-Fi → Join Room** and types the code.
 4. Either player can pause (it pauses both). Rematch starts when both pick it.
